@@ -3,6 +3,7 @@ from app.core.config import settings
 from app.llm.base import LLMAdapter
 from app.llm.gemini import GeminiAdapter
 from app.llm.anthropic import AnthropicAdapter
+from app.llm.resilient import ResilientLLMAdapter
 
 _current_adapter: Optional[LLMAdapter] = None
 
@@ -14,8 +15,12 @@ def get_llm_adapter() -> LLMAdapter:
 
     provider = settings.LLM_PROVIDER.lower()
     if provider == "anthropic":
-        _current_adapter = AnthropicAdapter()
+        primary = AnthropicAdapter()
+        fallback = GeminiAdapter()
     else:
-        _current_adapter = GeminiAdapter()
+        primary = GeminiAdapter()
+        fallback = AnthropicAdapter()
 
+    _current_adapter = ResilientLLMAdapter(primary=primary, fallback=fallback)
     return _current_adapter
+

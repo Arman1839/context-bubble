@@ -21,9 +21,19 @@ async def lifespan(app: FastAPI):
     init_firebase()
     # Eagerly initialize Firestore async client
     get_async_firestore_client()
+    from app.intelligence.stream_manager import stream_manager
+    await stream_manager.initialize_redis()
+    from app.pop.scheduler import PopScheduler
+    scheduler = PopScheduler(get_async_firestore_client())
+    sweeper_task = asyncio.create_task(scheduler.start_background_loop(interval_seconds=15.0))
     yield
     # Shutdown
+    sweeper_task.cancel()
+    if stream_manager._redis:
+        await stream_manager._redis.aclose()
     logger.info("Shutting down Context Bubble backend")
+
+
 
 
 app = FastAPI(

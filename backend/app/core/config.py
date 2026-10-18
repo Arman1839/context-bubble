@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # Security & Verification
     FIREBASE_APP_CHECK_ENFORCE: bool = False
     SERVER_INTERNAL_SECRET: str = "dev-internal-secret-for-cloud-tasks-and-schedulers"
+    REDIS_URL: str | None = None
+
 
     # Bubble Constraints & Debouncing
     BUBBLE_MAX_PARTICIPANTS: int = 10

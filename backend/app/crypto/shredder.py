@@ -55,6 +55,24 @@ class CryptoShredder:
         except Exception as e:
             logger.warning(f"Storage shred warning for bubble {bubble_id}: {e}")
 
+        # 2b. Overwrite and hard-delete local ephemeral uploads
+        try:
+            import os
+            import shutil
+            local_upload_dir = os.path.join("backend", ".ephemeral_uploads", bubble_id)
+            if os.path.exists(local_upload_dir):
+                for fname in os.listdir(local_upload_dir):
+                    fpath = os.path.join(local_upload_dir, fname)
+                    if os.path.isfile(fpath):
+                        with open(fpath, "wb") as f:
+                            f.write(b"\x00" * 1024)
+                        os.remove(fpath)
+                shutil.rmtree(local_upload_dir, ignore_errors=True)
+                deleted_storage_count += 1
+        except Exception as e:
+            logger.warning(f"Local storage shred error for bubble {bubble_id}: {e}")
+
+
         # 3. Destroy key material documents in _crypto_keys collection
         key_doc_ref = self.db.collection("_crypto_keys").document(bubble_id)
         key_snap = await key_doc_ref.get()

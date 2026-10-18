@@ -66,5 +66,12 @@ async def trigger_file_processing(
 @router.put("/mock-upload/{bubble_id}/{file_id}")
 async def mock_upload(bubble_id: str, file_id: str, request: Request):
     """Local dev upload handler when real GCS bucket credentials are not provided."""
+    import os
     body = await request.body()
-    return {"status": "uploaded_mock", "bytes_received": len(body), "file_id": file_id}
+    upload_dir = os.path.join("backend", ".ephemeral_uploads", bubble_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, file_id)
+    with open(file_path, "wb") as f:
+        f.write(body)
+    return {"status": "uploaded", "bytes_received": len(body), "file_id": file_id}
+

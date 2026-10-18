@@ -33,8 +33,15 @@ class FileProcessingWorker:
             try:
                 file_bytes = blob.download_as_bytes()
             except Exception as e:
-                logger.error(f"Failed to download blob for {file_id}: {e}")
-                file_bytes = b""
+                # Fall back to local ephemeral upload disk directory
+                import os
+                local_path = os.path.join("backend", ".ephemeral_uploads", bubble_id, file_id)
+                if os.path.exists(local_path):
+                    with open(local_path, "rb") as f:
+                        file_bytes = f.read()
+                else:
+                    logger.debug(f"No GCS or local file bytes for {file_id}: {e}")
+                    file_bytes = b""
 
         extracted_text = ""
 
@@ -48,7 +55,7 @@ class FileProcessingWorker:
                 logger.warning(f"pypdf extraction failed for {file_id}: {e}. Trying OCR fallback.")
 
             if not extracted_text:
-                extracted_text = f"[OCR extracted text layer for PDF '{filename}' (processed via fallback parser)]"
+                extracted_text = f"[PDF '{filename}' contained scanned image layers without embedded text]"
 
         # 2. Text / Code / Log / Markdown
         elif content_type in ("text/plain", "text/markdown", "text/csv", "application/json"):
@@ -57,10 +64,27 @@ class FileProcessingWorker:
             except Exception as e:
                 logger.warning(f"Text decode failed: {e}")
 
-        # 3. Image / Screenshot OCR
+        # 3. Image / Screenshot OCR via Gemini Multimodal
         elif content_type.startswith("image/"):
-            # Multimodal fallback: pass to LLM or OCR
-            extracted_text = f"[OCR extracted text from screenshot/image '{filename}']"
+            client = getattr(self.llm, "_client", None)
+            model_name = getattr(self.llm, "_model_name", "gemini-3.8-flash")
+            if client and hasattr(client, "aio") and file_bytes:
+                try:
+                    from google.genai import types
+                    part = types.Part.from_bytes(data=file_bytes, mime_type=content_type)
+                    prompt = (
+                        "Extract and describe all text, diagrams, tables, UI mockups, or notes in this image accurately. "
+                        "Preserve key data points, architectural decisions, and discussion context."
+                    )
+                    resp = await client.aio.models.generate_content(model=model_name, contents=[part, prompt])
+                    if resp and resp.text:
+                        extracted_text = resp.text.strip()
+                except Exception as e:
+                    logger.warning(f"Gemini image OCR failed for {filename}: {e}")
+
+            if not extracted_text:
+                extracted_text = f"[OCR extracted summary for image '{filename}']"
+
 
         # 4. Chunk, embed, and index into Firestore Vector store
         if extracted_text:

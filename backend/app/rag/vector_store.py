@@ -74,26 +74,51 @@ class FirestoreVectorStore:
                 })
             return results
         except Exception as e:
-            # Fallback for Firestore emulator / unindexed vector environments
-            logger.info(f"Using in-memory cosine similarity fallback for vector search: {e}")
-            all_chunks = await chunks_col.limit(100).get()
-            scored = []
+            # High-performance NumPy vectorized fallback for emulator / unindexed environments
+            logger.debug(f"Using vectorized NumPy cosine similarity for vector search: {e}")
+            all_chunks = await chunks_col.limit(500).get()
+            if not all_chunks:
+                return []
+
+            import numpy as np
+
+            q = np.array(query_vector, dtype=np.float32)
+            q_norm = np.linalg.norm(q)
+            if q_norm == 0:
+                return []
+            q_unit = q / q_norm
+
+            matrix_rows = []
+            chunk_metadata = []
+
             for d in all_chunks:
                 data = d.to_dict() or {}
                 emb = data.get("embedding")
                 if emb is not None:
-                    # In python, Vector might be wrapped or list
                     raw_vec = emb.values if hasattr(emb, "values") else emb
-                    score = cosine_similarity(query_vector, list(raw_vec))
-                    scored.append((score, data))
+                    matrix_rows.append(raw_vec)
+                    chunk_metadata.append(data)
 
-            scored.sort(key=lambda x: x[0], reverse=True)
+            if not matrix_rows:
+                return []
+
+            mat = np.array(matrix_rows, dtype=np.float32)
+            # Row-wise L2 norms
+            norms = np.linalg.norm(mat, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            mat_unit = mat / norms
+
+            # Cosine similarity is the dot product of unit vectors
+            scores = np.dot(mat_unit, q_unit)
+            top_indices = np.argsort(scores)[::-1][:k]
+
             return [
                 {
-                    "chunk_id": item[1].get("chunk_id", ""),
-                    "source_id": item[1].get("source_id"),
-                    "text": item[1].get("text", ""),
-                    "score": item[0],
+                    "chunk_id": chunk_metadata[idx].get("chunk_id", ""),
+                    "source_id": chunk_metadata[idx].get("source_id"),
+                    "text": chunk_metadata[idx].get("text", ""),
+                    "score": float(scores[idx]),
                 }
-                for item in scored[:k]
+                for idx in top_indices
             ]
+

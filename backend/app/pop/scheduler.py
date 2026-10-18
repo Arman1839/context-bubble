@@ -58,26 +58,54 @@ class PopScheduler:
             logger.warning(f"Cloud Task scheduling error for bubble {bubble_id}: {e}")
             return None
 
-    async def run_sweeper_backstop(self, pop_trigger_callback):
+    async def run_sweeper_backstop(self, pop_trigger_callback=None):
         """
-        Cloud Scheduler sweeper running every 2-5 minutes to pop any expired bubbles
-        that may have been missed due to transient task issues.
+        Sweeper running periodically to pop any expired bubbles
+        that may have been missed due to transient task issues or restarts.
         """
-        now = datetime.now(timezone.utc)
-        logger.info(f"Running Cloud Scheduler sweeper backstop at {now.isoformat()}")
+        from app.core.lock import DistributedLock
+        from app.pop.state_machine import PopStateMachine
 
+        now = datetime.now(timezone.utc)
         query = (
             self.db.collection("bubbles")
             .where("pop_state", "==", "ACTIVE")
             .where("expires_at", "<=", now)
             .limit(25)
         )
-        expired_docs = await query.get()
+        try:
+            expired_docs = await query.get()
+        except Exception as e:
+            logger.debug(f"Sweeper query check: {e}")
+            return
+
+        if not expired_docs:
+            return
+
         logger.info(f"Sweeper identified {len(expired_docs)} expired bubbles to pop.")
 
         for doc in expired_docs:
             b_id = doc.id
+            lock = DistributedLock(self.db, f"pop_sweeper_{b_id}", ttl_seconds=30.0)
+            if not await lock.acquire():
+                continue
             try:
-                await pop_trigger_callback(b_id, is_timer_expired=True)
+                if pop_trigger_callback:
+                    await pop_trigger_callback(b_id, is_timer_expired=True)
+                else:
+                    sm = PopStateMachine(self.db)
+                    await sm.initiate_pop(b_id, actor_id="system_sweeper", is_timer_expiry=True)
+                logger.info(f"Sweeper successfully triggered auto-pop for bubble {b_id}")
             except Exception as e:
                 logger.error(f"Sweeper failed to pop expired bubble {b_id}: {e}")
+
+    async def start_background_loop(self, interval_seconds: float = 30.0):
+        """Starts a persistent background sweeper loop."""
+        logger.info(f"Starting persistent PopScheduler sweeper daemon (every {interval_seconds}s)")
+        try:
+            while True:
+                await asyncio.sleep(interval_seconds)
+                await self.run_sweeper_backstop()
+        except asyncio.CancelledError:
+            logger.info("PopScheduler sweeper daemon stopped.")
+
