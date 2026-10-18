@@ -5,14 +5,27 @@ import Link from "next/link";
 import type { Bubble, Role } from "@/types";
 import { formatExpiry } from "@/lib/sample-data";
 
+import type { User } from "firebase/auth";
+
 interface Props {
   bubble: Bubble;
   role: Role;
   onToggleRole: () => void;
   onOpenManage: () => void;
+  currentUser?: User | null;
+  onSignInGoogle?: () => void;
+  onSignOut?: () => void;
 }
 
-export function Header({ bubble, role, onToggleRole, onOpenManage }: Props) {
+export function Header({
+  bubble,
+  role,
+  onToggleRole,
+  onOpenManage,
+  currentUser,
+  onSignInGoogle,
+  onSignOut,
+}: Props) {
   // Compute expiry client-side dynamically to update while the page is open
   const [expiryLabel, setExpiryLabel] = useState<string>(() => formatExpiry(bubble.expiresAt));
   const [prevExpiresAt, setPrevExpiresAt] = useState(bubble.expiresAt);
@@ -74,7 +87,7 @@ export function Header({ bubble, role, onToggleRole, onOpenManage }: Props) {
         <span className="text-slate-400 text-xs">{bubble.memberCount} members active</span>
       </div>
 
-      {/* Expiry — rendered after client hydration to avoid Date.now() prerender issue */}
+      {/* Expiry */}
       {expiryLabel && (
         <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-xs shrink-0">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -105,8 +118,52 @@ export function Header({ bubble, role, onToggleRole, onOpenManage }: Props) {
         {role.toUpperCase()}
       </span>
 
-      {/* Avatar placeholder */}
-      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shrink-0" />
+      {/* Firebase User Authentication Pill */}
+      {currentUser ? (
+        <div className="flex items-center gap-2 bg-[#1e293b] border border-white/10 rounded-full pl-2 pr-3 py-1 shrink-0">
+          {currentUser.photoURL ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={currentUser.photoURL}
+              alt={currentUser.displayName || "User"}
+              className="w-6 h-6 rounded-full"
+            />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-violet-600/30 text-violet-300 font-bold text-[10px] flex items-center justify-center">
+              {currentUser.isAnonymous ? "AN" : (currentUser.displayName?.charAt(0) || "U")}
+            </div>
+          )}
+          <span className="text-slate-300 text-xs font-medium max-w-[90px] truncate">
+            {currentUser.isAnonymous ? `Anon-${currentUser.uid.slice(0, 4)}` : (currentUser.displayName || currentUser.email)}
+          </span>
+          {currentUser.isAnonymous && onSignInGoogle && (
+            <button
+              onClick={onSignInGoogle}
+              className="ml-1 text-[10px] text-violet-400 hover:text-violet-300 font-medium underline"
+            >
+              Link Google
+            </button>
+          )}
+          {!currentUser.isAnonymous && onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="ml-1 text-[10px] text-slate-400 hover:text-rose-400 transition-colors"
+              title="Sign out"
+            >
+              Sign out
+            </button>
+          )}
+        </div>
+      ) : (
+        onSignInGoogle && (
+          <button
+            onClick={onSignInGoogle}
+            className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors shrink-0 flex items-center gap-1.5"
+          >
+            <span>Sign in</span>
+          </button>
+        )
+      )}
 
       {/* Demo toggle */}
       <button
@@ -119,3 +176,4 @@ export function Header({ bubble, role, onToggleRole, onOpenManage }: Props) {
     </header>
   );
 }
+

@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import type { Bubble, Role, Contribution } from "@/types";
 import { Header } from "@/components/layout/Header";
 import { ContributionFeed } from "@/components/participant/ContributionFeed";
 import { LiveIntelligencePanel } from "@/components/intelligence/LiveIntelligencePanel";
 import { ManageBubblePanel } from "@/components/host/ManageBubblePanel";
+import { useFirebaseAuth } from "@/lib/auth";
+import { subscribeToBubbleMessages, sendMessageToFirestore } from "@/lib/messages";
 
 interface Props {
   initialBubble: Bubble;
@@ -21,8 +23,10 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
     setRole(initialRole);
   }
 
-  // Initialize demo bubble's expiry to exactly two hours after initialization,
-  // and dynamically set realistic timestamps for initial demo contributions.
+  // Firebase Auth state
+  const { user, signInGoogle, signOut } = useFirebaseAuth();
+
+  // Initialize demo bubble state
   const [bubble, setBubble] = useState<Bubble>(() => {
     const now = Date.now();
     return {
@@ -30,11 +34,11 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
       expiresAt: new Date(now + 2 * 60 * 60 * 1000), // Exactly 2 hours after initialization
       contributions: initialBubble.contributions.map((c) => {
         const demoOffsets: Record<string, number> = {
-          c1: 1 * 60 * 1000, // 1m ago
-          c2: 3 * 60 * 1000, // 3m ago
-          c3: 5 * 60 * 1000, // 5m ago
-          c4: 7 * 60 * 1000, // 7m ago
-          c5: 9 * 60 * 1000, // 9m ago
+          c1: 1 * 60 * 1000,
+          c2: 3 * 60 * 1000,
+          c3: 5 * 60 * 1000,
+          c4: 7 * 60 * 1000,
+          c5: 9 * 60 * 1000,
         };
         const offset = demoOffsets[c.id];
         return offset !== undefined
@@ -46,19 +50,44 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
   const [isManageOpen, setIsManageOpen] = useState(false);
   const [newCount, setNewCount] = useState(12);
 
-  // Local: submit a new contribution
+  // Subscribe to real-time messages in Firestore
+  useEffect(() => {
+    if (!bubble.id) return;
+    const unsubscribe = subscribeToBubbleMessages(
+      bubble.id,
+      (firestoreMsgs) => {
+        if (firestoreMsgs && firestoreMsgs.length > 0) {
+          setBubble((prev) => ({
+            ...prev,
+            contributions: firestoreMsgs,
+          }));
+        }
+      },
+      (err) => {
+        console.debug("Firestore live messages sync status:", err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [bubble.id]);
+
+  // Submit a new contribution to Firestore & optimistic local UI
   const handleNewContribution = useCallback((text: string) => {
     const authorDisplayName = bubble.anonymousModeEnabled
       ? "Anonymous"
-      : (initialUserName || "You");
+      : (user?.displayName || initialUserName || "You");
 
+    const authorUid = user?.uid || `anon-${Date.now()}`;
+    const authorAvatar = bubble.anonymousModeEnabled
+      ? undefined
+      : (user?.photoURL || `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(authorDisplayName)}&backgroundColor=ffd5dc`);
+
+    // 1. Optimistic UI update
     const newContribution: Contribution = {
       id: `c-${Date.now()}`,
-      authorId: "current-user",
+      authorId: authorUid,
       authorName: authorDisplayName,
-      authorAvatar: bubble.anonymousModeEnabled
-        ? undefined
-        : `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(authorDisplayName)}&backgroundColor=ffd5dc`,
+      authorAvatar,
       isAnonymous: bubble.anonymousModeEnabled,
       text,
       timestamp: new Date(),
@@ -68,7 +97,18 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
       contributions: [newContribution, ...prev.contributions],
     }));
     setNewCount((n) => n + 1);
-  }, [bubble.anonymousModeEnabled, initialUserName]);
+
+    // 2. Persist to Firestore & notify backend AI
+    sendMessageToFirestore({
+      bubbleId: bubble.id,
+      authorId: authorUid,
+      authorName: authorDisplayName,
+      text,
+      isAnonymous: bubble.anonymousModeEnabled,
+    }).catch((err) => {
+      console.warn("Failed to write message to Firestore:", err);
+    });
+  }, [bubble.id, bubble.anonymousModeEnabled, initialUserName, user]);
 
   // Local: toggle anonymous mode
   const handleToggleAnonymous = useCallback(() => {
@@ -93,6 +133,9 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
         role={role}
         onToggleRole={() => setRole((r) => (r === "participant" ? "host" : "participant"))}
         onOpenManage={() => setIsManageOpen(true)}
+        currentUser={user}
+        onSignInGoogle={signInGoogle}
+        onSignOut={signOut}
       />
 
       {/* Main two-column layout */}
@@ -126,3 +169,4 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
     </div>
   );
 }
+
