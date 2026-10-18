@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -8,18 +8,19 @@ function JoinBubbleForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [code, setCode] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Pre-fill code if present in URL
-  useEffect(() => {
-    const codeParam = searchParams.get("code") || searchParams.get("id");
+  const codeParam = searchParams.get("code") || searchParams.get("id") || "";
+  const [code, setCode] = useState(codeParam);
+  const [prevCodeParam, setPrevCodeParam] = useState(codeParam);
+  if (codeParam !== prevCodeParam) {
+    setPrevCodeParam(codeParam);
     if (codeParam) {
       setCode(codeParam);
     }
-  }, [searchParams]);
+  }
+
+  const [displayName, setDisplayName] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function handleJoin(e: React.FormEvent) {
     e.preventDefault();

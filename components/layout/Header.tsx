@@ -14,10 +14,14 @@ interface Props {
 
 export function Header({ bubble, role, onToggleRole, onOpenManage }: Props) {
   // Compute expiry client-side dynamically to update while the page is open
-  const [expiryLabel, setExpiryLabel] = useState<string>("");
+  const [expiryLabel, setExpiryLabel] = useState<string>(() => formatExpiry(bubble.expiresAt));
+  const [prevExpiresAt, setPrevExpiresAt] = useState(bubble.expiresAt);
+  if (bubble.expiresAt !== prevExpiresAt) {
+    setPrevExpiresAt(bubble.expiresAt);
+    setExpiryLabel(formatExpiry(bubble.expiresAt));
+  }
 
   useEffect(() => {
-    setExpiryLabel(formatExpiry(bubble.expiresAt));
     const timer = setInterval(() => {
       setExpiryLabel(formatExpiry(bubble.expiresAt));
     }, 1000);
@@ -53,6 +57,7 @@ export function Header({ bubble, role, onToggleRole, onOpenManage }: Props) {
       <div className="flex items-center gap-2 shrink-0">
         <div className="flex -space-x-2">
           {bubble.members.slice(0, 5).map((m) => (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img
               key={m.id}
               src={m.avatar}

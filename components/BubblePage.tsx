@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import type { Bubble, Role, Contribution } from "@/types";
 import { Header } from "@/components/layout/Header";
 import { ContributionFeed } from "@/components/participant/ContributionFeed";
@@ -15,25 +15,20 @@ interface Props {
 
 export function BubblePage({ initialBubble, initialRole, initialUserName }: Props) {
   const [role, setRole] = useState<Role>(initialRole || "participant");
-  const [bubble, setBubble] = useState<Bubble>(initialBubble);
-  const [isManageOpen, setIsManageOpen] = useState(false);
-  const [newCount, setNewCount] = useState(12);
-
-  // Sync role if initialRole changes
-  useEffect(() => {
-    if (initialRole) {
-      setRole(initialRole);
-    }
-  }, [initialRole]);
+  const [prevRole, setPrevRole] = useState(initialRole);
+  if (initialRole && initialRole !== prevRole) {
+    setPrevRole(initialRole);
+    setRole(initialRole);
+  }
 
   // Initialize demo bubble's expiry to exactly two hours after initialization,
   // and dynamically set realistic timestamps for initial demo contributions.
-  useEffect(() => {
+  const [bubble, setBubble] = useState<Bubble>(() => {
     const now = Date.now();
-    setBubble((prev) => ({
-      ...prev,
+    return {
+      ...initialBubble,
       expiresAt: new Date(now + 2 * 60 * 60 * 1000), // Exactly 2 hours after initialization
-      contributions: prev.contributions.map((c) => {
+      contributions: initialBubble.contributions.map((c) => {
         const demoOffsets: Record<string, number> = {
           c1: 1 * 60 * 1000, // 1m ago
           c2: 3 * 60 * 1000, // 3m ago
@@ -46,8 +41,10 @@ export function BubblePage({ initialBubble, initialRole, initialUserName }: Prop
           ? { ...c, timestamp: new Date(now - offset) }
           : c;
       }),
-    }));
-  }, []);
+    };
+  });
+  const [isManageOpen, setIsManageOpen] = useState(false);
+  const [newCount, setNewCount] = useState(12);
 
   // Local: submit a new contribution
   const handleNewContribution = useCallback((text: string) => {

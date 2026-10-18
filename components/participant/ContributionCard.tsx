@@ -22,10 +22,14 @@ export function ContributionCard({ contribution }: Props) {
   const isAnon = contribution.isAnonymous;
 
   // Compute relative timestamp dynamically on client
-  const [timeAgo, setTimeAgo] = useState<string>("");
+  const [timeAgo, setTimeAgo] = useState<string>(() => computeTimeAgo(contribution.timestamp));
+  const [prevTimestamp, setPrevTimestamp] = useState(contribution.timestamp);
+  if (contribution.timestamp !== prevTimestamp) {
+    setPrevTimestamp(contribution.timestamp);
+    setTimeAgo(computeTimeAgo(contribution.timestamp));
+  }
 
   useEffect(() => {
-    setTimeAgo(computeTimeAgo(contribution.timestamp));
     const timer = setInterval(() => setTimeAgo(computeTimeAgo(contribution.timestamp)), 5000);
     return () => clearInterval(timer);
   }, [contribution.timestamp]);
@@ -47,6 +51,7 @@ export function ContributionCard({ contribution }: Props) {
             </svg>
           </div>
         ) : (
+          /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={contribution.authorAvatar}
             alt={contribution.authorName}

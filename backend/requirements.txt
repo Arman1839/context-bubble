@@ -1,0 +1,41 @@
+# Core Framework & Web
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+pydantic-settings==2.8.0
+python-multipart==0.0.20
+sse-starlette==2.2.1
+websockets==14.2
+httpx==0.28.1
+
+# Firebase & Google Cloud
+firebase-admin==6.6.0
+google-cloud-firestore==2.20.0
+google-cloud-storage==2.19.0
+google-cloud-tasks==2.18.0
+google-cloud-scheduler==2.14.0
+google-cloud-secret-manager==2.22.0
+google-cloud-pubsub==2.27.1
+
+# AI & LLM Providers
+google-genai==1.2.0
+anthropic==0.45.2
+numpy==2.2.2
+
+# Document Processing & Briefing Export
+pypdf==5.3.0
+jinja2==3.1.5
+reportlab==4.3.1
+
+# Cryptography & Security
+cryptography==44.0.0
+PyJWT[crypto]==2.10.1
+
+# Observability
+opentelemetry-api==1.30.0
+opentelemetry-sdk==1.30.0
+opentelemetry-instrumentation-fastapi==0.51b0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.3
