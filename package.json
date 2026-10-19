@@ -4,12 +4,18 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:backend": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir backend",
+    "seed": "python backend/scripts/seed_demo.py",
+    "test:backend": "python -m pytest backend/tests",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "cloudinary": "^2.11.0",
+    "firebase": "^13.0.0",
     "next": "16.4.2",
+    "next-cloudinary": "^6.19.3",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

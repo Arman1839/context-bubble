@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Check if caller is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Check if caller is an active participant in the bubble
+    function isParticipant(bubbleId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/bubbles/$(bubbleId)/participants/$(request.auth.uid));
+    }
+
+    // Helper: Check if caller is the bubble host
+    function isHost(bubbleId) {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/bubbles/$(bubbleId)).data.host_id == request.auth.uid;
+    }
+
+    // ─── Bubbles Root Collection ───────────────────────────────────────────
+    match /bubbles/{bubbleId} {
+      // Clients may read active bubble metadata if they are participants or joining
+      allow read: if isAuthenticated();
+      // ALL WRITES MUST GO THROUGH THE BACKEND (Admin SDK bypasses security rules)
+      allow write: if false;
+
+      // ─── Subcollections ──────────────────────────────────────────────────
+      // Participants: only participants may read member list
+      match /participants/{userId} {
+        allow read: if isParticipant(bubbleId);
+        allow write: if false;
+      }
+
+      // Messages: realtime listeners for chat stream
+      match /messages/{messageId} {
+        allow read: if isParticipant(bubbleId);
+        allow write: if false;
+      }
+
+      // Contributions: shared links, notes, transcripts
+      match /contributions/{contribId} {
+        allow read: if isParticipant(bubbleId);
+        allow write: if false;
+      }
+
+      // Intelligence & Insights: live summary & delta snapshots
+      match /intelligence/{docId} {
+        allow read: if isParticipant(bubbleId);
+        allow write: if false;
+      }
+
+      // Knowledge Graph: React Flow nodes & edges
+      match /graph/{docId} {
+        allow read: if isParticipant(bubbleId);
+        allow write: if false;
+      }
+
+      // Files & Uploads metadata
+      match /files/{fileId} {
+        allow read: if isParticipant(bubbleId);
+        allow write: if false;
+      }
+
+      // Exports: host only
+      match /exports/{exportId} {
+        allow read: if isHost(bubbleId);
+        allow write: if false;
+      }
+
+      // Internal Chunks & Vectors: Backend only
+      match /chunks/{chunkId} {
+        allow read, write: if false;
+      }
+    }
+
+    // Distributed leases, audit receipts, and crypto keys: strictly Backend only
+    match /{internalCollection}/{docId} {
+      allow read, write: if false;
+    }
+  }
+}

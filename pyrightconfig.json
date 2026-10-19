@@ -1,0 +1,14 @@
+{
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/.next",
+    "**/__pycache__"
+  ],
+  "extraPaths": [
+    "./backend"
+  ],
+  "reportMissingImports": "warning"
+}

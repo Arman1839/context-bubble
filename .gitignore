@@ -69,6 +69,18 @@ web_modules/
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+.venv/
+env/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -147,3 +159,8 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Firebase service account keys — never commit
+**/serviceAccountKey.json
+**/service-account*.json
+**/firebase-adminsdk*.json

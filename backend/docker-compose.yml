@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - PORT=8000
+      - FIRESTORE_EMULATOR_HOST=firebase-emulators:8080
+      - FIREBASE_AUTH_EMULATOR_HOST=firebase-emulators:9099
+      - FIREBASE_STORAGE_EMULATOR_HOST=firebase-emulators:9199
+      - GOOGLE_CLOUD_PROJECT=context-bubble-dev
+      - LLM_PROVIDER=gemini
+      - GEMINI_API_KEY=AIzaSyFakeKeyForLocalDev
+    volumes:
+      - .:/app
+    depends_on:
+      - firebase-emulators
+
+  firebase-emulators:
+    image: spine3/firebase-emulators:latest
+    ports:
+      - "4000:4000" # Emulator Suite UI
+      - "8080:8080" # Firestore Emulator
+      - "9099:9099" # Auth Emulator
+      - "9199:9199" # Storage Emulator
+    environment:
+      - GCP_PROJECT=context-bubble-dev
