@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -72,14 +72,15 @@ class UpdateTriggerModeRequest(BaseModel):
 class BubbleResponse(BaseModel):
     id: str
     title: str
-    is_live: bool
-    expires_at: datetime
-    member_count: int
-    members: List[BubbleMember]
-    retention_policy: RetentionPolicy
-    anonymous_mode_enabled: bool
-    host_id: str
-    pop_state: PopState
-    trigger_mode: AITriggerMode
-    e2ee_enabled: bool
-    created_at: datetime
+    is_live: bool = True
+    expires_at: Optional[datetime] = None
+    member_count: int = 1
+    members: List[BubbleMember] = Field(default_factory=list)
+    retention_policy: RetentionPolicy = "temporary"
+    anonymous_mode_enabled: bool = False
+    host_id: str = ""
+    pop_state: PopState = "ACTIVE"
+    trigger_mode: AITriggerMode = "mention"
+    e2ee_enabled: bool = False
+    created_at: Optional[datetime] = None
+    intelligence: Optional[Dict[str, Any]] = None

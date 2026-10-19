@@ -1,8 +1,11 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Optional
 try:
+    # pyrefly: ignore[missing-import]
     from google.cloud import tasks_v2
+    # pyrefly: ignore[missing-source-for-stubs]
     from google.protobuf import timestamp_pb2
     HAS_TASKS = True
 except ImportError:
@@ -20,6 +23,7 @@ class PopScheduler:
     def __init__(self, db: firestore.AsyncClient):
         self.db = db
         try:
+            assert tasks_v2 is not None
             self._client = tasks_v2.CloudTasksClient()
         except Exception:
             self._client = None
@@ -35,9 +39,11 @@ class PopScheduler:
             task_name = f"{parent}/tasks/pop_{bubble_id}_{int(run_at.timestamp())}"
 
             # Convert datetime to protobuf timestamp
+            assert timestamp_pb2 is not None
             timestamp = timestamp_pb2.Timestamp()
             timestamp.FromDatetime(run_at)
 
+            assert tasks_v2 is not None
             task = {
                 "name": task_name,
                 "http_request": {
@@ -68,6 +74,7 @@ class PopScheduler:
 
         now = datetime.now(timezone.utc)
         query = (
+            # pyrefly: ignore[missing-attribute]
             self.db.collection("bubbles")
             .where("pop_state", "==", "ACTIVE")
             .where("expires_at", "<=", now)

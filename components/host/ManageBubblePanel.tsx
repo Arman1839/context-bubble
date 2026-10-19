@@ -1,14 +1,17 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import type { Bubble } from "@/types";
+import type { Bubble, AITriggerMode, ExportTarget, PopState } from "@/types";
 import { formatExpiry } from "@/lib/sample-data";
+import { extendBubble, updateTriggerMode, configureExportTarget, popBubble } from "@/lib/api";
 
 interface Props {
   bubble: Bubble;
   onClose: () => void;
   onToggleAnonymous: () => void;
-  onExtendExpiry: () => void;
+  onExtendExpiry?: () => void;
+  onBubbleUpdated?: (updated: Partial<Bubble>) => void;
+  onBubblePopped?: (finalState: PopState) => void;
 }
 
 export function ManageBubblePanel({
@@ -16,15 +19,35 @@ export function ManageBubblePanel({
   onClose,
   onToggleAnonymous,
   onExtendExpiry,
+  onBubbleUpdated,
+  onBubblePopped,
 }: Props) {
-  // Compute expiry client-side dynamically to update while the page is open
   const [expiryLabel, setExpiryLabel] = useState<string>(() => formatExpiry(bubble.expiresAt));
-  const [prevExpiresAt, setPrevExpiresAt] = useState(bubble.expiresAt);
-  if (bubble.expiresAt !== prevExpiresAt) {
-    setPrevExpiresAt(bubble.expiresAt);
-    setExpiryLabel(formatExpiry(bubble.expiresAt));
-  }
-  const [copied, setCopied] = useState<boolean>(false);
+  const [copied, setCopied] = useState(false);
+
+  // AI Trigger Mode state
+  const [triggerMode, setTriggerMode] = useState<AITriggerMode>(bubble.triggerMode || "auto");
+  const [isUpdatingTrigger, setIsUpdatingTrigger] = useState(false);
+
+  // Extend Expiry state
+  const [isExtending, setIsExtending] = useState(false);
+
+  // Export targets
+  const [exportsConfig, setExportsConfig] = useState<Record<ExportTarget, boolean>>({
+    markdown: true,
+    pdf: true,
+    slack: true,
+    notion: false,
+    linear: false,
+    jira: false,
+  });
+
+  // Pop confirmation modal
+  const [showPopModal, setShowPopModal] = useState(false);
+  const [isPopping, setIsPopping] = useState(false);
+  const [popDryRun, setPopDryRun] = useState(false);
+  const [customBriefingPrompt, setCustomBriefingPrompt] = useState("");
+  const [popStatusText, setPopStatusText] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -34,20 +57,93 @@ export function ManageBubblePanel({
   }, [bubble.expiresAt]);
 
   const handleCopyInviteLink = () => {
-    const inviteUrl = typeof window !== "undefined"
-      ? `${window.location.origin}/join?code=${bubble.id}`
-      : `/join?code=${bubble.id}`;
+    const inviteUrl =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/join?code=${bubble.id}`
+        : `/join?code=${bubble.id}`;
+
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(inviteUrl).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }).catch(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       });
     } else {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleExtend = async (minutes: number) => {
+    setIsExtending(true);
+    try {
+      const res = await extendBubble(bubble.id, minutes);
+      const newExpiry = new Date(res.new_expires_at || Date.now() + minutes * 60 * 1000);
+      if (onBubbleUpdated) {
+        onBubbleUpdated({ expiresAt: newExpiry });
+      }
+      if (onExtendExpiry) {
+        onExtendExpiry();
+      }
+    } catch (err: unknown) {
+      console.warn("Extend bubble notice (falling back locally):", err);
+      if (onExtendExpiry) onExtendExpiry();
+    } finally {
+      setIsExtending(false);
+    }
+  };
+
+  const handleTriggerModeChange = async (mode: AITriggerMode) => {
+    setTriggerMode(mode);
+    setIsUpdatingTrigger(true);
+    try {
+      await updateTriggerMode(bubble.id, mode);
+      if (onBubbleUpdated) {
+        onBubbleUpdated({ triggerMode: mode });
+      }
+    } catch (err) {
+      console.warn("Update trigger mode notice:", err);
+    } finally {
+      setIsUpdatingTrigger(false);
+    }
+  };
+
+  const handleToggleExportTarget = async (target: ExportTarget) => {
+    const nextState = !exportsConfig[target];
+    setExportsConfig((prev) => ({ ...prev, [target]: nextState }));
+    try {
+      await configureExportTarget(bubble.id, {
+        target,
+        enabled: nextState,
+        target_channel_or_db: target === "slack" ? "general" : undefined,
+      });
+    } catch (err) {
+      console.debug("Export target update status:", err);
+    }
+  };
+
+  const handleExecutePop = async () => {
+    setIsPopping(true);
+    setPopStatusText("Initiating Pop State Machine... Generating Executive Briefing...");
+
+    try {
+      const res = await popBubble(bubble.id, {
+        dry_run: popDryRun,
+        force_shred_on_export_failure: false,
+        custom_briefing_prompt: customBriefingPrompt.trim() || undefined,
+      });
+
+      setPopStatusText(`State: ${res.pop_state}. Completing exports & shredding...`);
+      setTimeout(() => {
+        setIsPopping(false);
+        setShowPopModal(false);
+        if (onBubblePopped) {
+          onBubblePopped(res.pop_state);
+        }
+        onClose();
+      }, 1000);
+    } catch (err: unknown) {
+      setPopStatusText(err instanceof Error ? err.message : "Pop failed");
+      setIsPopping(false);
     }
   };
 
@@ -59,27 +155,60 @@ export function ManageBubblePanel({
         onClick={onClose}
       />
 
-      {/* Panel */}
-      <div className="fixed top-14 right-4 z-50 w-[360px] max-h-[calc(100vh-5rem)] overflow-y-auto rounded-2xl bg-[#111827] border border-white/10 shadow-2xl flex flex-col">
+      {/* Main Panel */}
+      <div className="fixed top-14 right-4 z-50 w-[400px] max-h-[calc(100vh-5rem)] overflow-y-auto rounded-2xl bg-[#111827] border border-white/10 shadow-2xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-lg">🔧</span>
-            <h2 className="text-white font-semibold">Manage Bubble</h2>
+            <h2 className="text-white font-semibold text-sm">Host Control Panel</h2>
           </div>
           <button
             onClick={onClose}
             className="text-slate-400 hover:text-white transition-colors"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            ✕
           </button>
         </div>
 
-        <div className="flex flex-col gap-6 p-5">
-          {/* Anonymous Mode */}
+        <div className="flex flex-col gap-5 p-5">
+          {/* AI Trigger Mode */}
           <section className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-white text-xs font-semibold uppercase tracking-wider text-slate-300">
+                AI Synthesis Trigger Mode
+              </h3>
+              {isUpdatingTrigger && (
+                <span className="text-[10px] text-violet-400 animate-pulse">Saving...</span>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {(["mention", "auto", "always"] as AITriggerMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => handleTriggerModeChange(mode)}
+                  className={`py-2 px-2.5 rounded-xl border text-xs font-medium capitalize transition-all ${
+                    triggerMode === mode
+                      ? "border-violet-500 bg-violet-900/30 text-white shadow-sm"
+                      : "border-white/10 bg-[#161d2e] text-slate-400 hover:text-white hover:border-white/20"
+                  }`}
+                >
+                  {mode === "auto" ? "Auto (3s)" : mode}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-500">
+              {triggerMode === "auto"
+                ? "Auto-synthesizes in background after a 3s pause in discussion."
+                : triggerMode === "mention"
+                ? "Only activates when a participant types @AI."
+                : "Runs inference immediately on every message."}
+            </p>
+          </section>
+
+          {/* Anonymous Mode */}
+          <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
             <div className="flex items-center justify-between">
               <span className="text-white text-sm font-medium">
                 Anonymous Mode{" "}
@@ -87,7 +216,6 @@ export function ManageBubblePanel({
                   ({bubble.anonymousModeEnabled ? "ON" : "OFF"})
                 </span>
               </span>
-              {/* Toggle switch */}
               <button
                 onClick={onToggleAnonymous}
                 className={`relative w-11 h-6 rounded-full transition-colors ${
@@ -103,130 +231,185 @@ export function ManageBubblePanel({
               </button>
             </div>
             <p className="text-slate-400 text-xs leading-relaxed">
-              Only affects new contributions. Previously anonymous contributions will remain anonymous. Host cannot identify authors.
+              When ON, all subsequent messages hide participant names and avatars.
             </p>
           </section>
 
-          {/* Retention Policy */}
-          <section className="flex flex-col gap-2">
-            <h3 className="text-white text-sm font-medium">Retention Policy</h3>
-            <div className="rounded-xl border border-white/10 bg-[#1a2236] p-3 flex flex-col gap-1.5">
-              <div className="flex items-center gap-2">
-                <svg className="w-3.5 h-3.5 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM12 17c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
-                </svg>
-                <span className="text-white text-sm font-medium">Temporary Bubble + Decision Record</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <svg className="w-3.5 h-3.5 text-slate-500" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM12 17c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
-                </svg>
-                <span className="text-slate-400 text-xs">Retention policy locked</span>
-              </div>
-              <p className="text-slate-500 text-xs mt-1">
-                Selected when the Bubble was created. Locked after the first contribution.
-              </p>
-            </div>
-          </section>
-
-          {/* Expiry Settings */}
-          <section className="flex flex-col gap-2">
-            <h3 className="text-white text-sm font-medium">Expiry Settings</h3>
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-slate-300 text-sm">
-                Auto-expires in:{" "}
-                <span className="text-white font-medium">{expiryLabel || "…"}</span>
-              </span>
-              <button
-                onClick={onExtendExpiry}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-white/10 bg-[#1a2236] text-slate-300 text-xs hover:bg-[#243050] transition-colors"
-              >
-                + 30m
-              </button>
-              <button className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-white/10 bg-[#1a2236] text-slate-300 text-xs hover:bg-[#243050] transition-colors">
-                Extend ▾
-              </button>
-            </div>
-          </section>
-
-          {/* Members & Invitations */}
-          <section className="flex flex-col gap-2">
-            <h3 className="text-white text-sm font-medium">Members &amp; Invitations</h3>
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="flex -space-x-2">
-                  {bubble.members.slice(0, 4).map((m) => (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
-                      key={m.id}
-                      src={m.avatar}
-                      alt={m.name}
-                      className="w-7 h-7 rounded-full border-2 border-[#111827] bg-slate-700"
-                    />
-                  ))}
-                </div>
-                <span className="text-slate-300 text-sm">{bubble.memberCount} Active Members</span>
-              </div>
-              <button
-                onClick={handleCopyInviteLink}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 bg-[#1a2236] text-slate-300 text-xs hover:bg-[#243050] transition-colors shrink-0"
-              >
-                {copied ? (
-                  <>
-                    <svg className="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                    </svg>
-                    <span className="text-green-400 font-medium">Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    <span>Copy Invite Link</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </section>
-
-          {/* Decision Record */}
-          <section className="flex flex-col gap-2">
-            <h3 className="text-white text-sm font-medium">
-              Decision Record{" "}
-              <span className="text-slate-400 font-normal">(New / Updated)</span>
+          {/* Expiry Extension */}
+          <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
+            <h3 className="text-white text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Auto-Destruction Timer
             </h3>
-            <div className="rounded-xl border border-white/10 bg-[#1a2236] p-3 flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-1.5 mb-1">
-                  <span>📝</span>
-                  <span className="text-white text-sm font-medium">Review Record Preview</span>
-                </div>
-                <p className="text-slate-400 text-xs">(Contains: Conclusion, Supporting Dissenting views, Risks, Next steps)</p>
+            <div className="rounded-xl border border-white/10 bg-[#161d2e] p-3 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-400">Expires in:</span>
+                <span className="font-mono text-violet-300 font-semibold">{expiryLabel || "..."}</span>
               </div>
-              <button className="px-3 py-1.5 rounded-lg bg-[#0d1117] border border-white/10 text-white text-xs font-medium hover:bg-slate-800 transition-colors shrink-0">
-                Preview &amp; Approve
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleExtend(15)}
+                  disabled={isExtending}
+                  className="flex-1 py-1.5 rounded-lg border border-white/10 bg-[#1a2236] hover:bg-[#243050] text-xs font-medium text-slate-200 transition-colors"
+                >
+                  +15m
+                </button>
+                <button
+                  onClick={() => handleExtend(30)}
+                  disabled={isExtending}
+                  className="flex-1 py-1.5 rounded-lg border border-white/10 bg-[#1a2236] hover:bg-[#243050] text-xs font-medium text-slate-200 transition-colors"
+                >
+                  +30m
+                </button>
+                <button
+                  onClick={() => handleExtend(60)}
+                  disabled={isExtending}
+                  className="flex-1 py-1.5 rounded-lg border border-white/10 bg-[#1a2236] hover:bg-[#243050] text-xs font-medium text-slate-200 transition-colors"
+                >
+                  +1 hr
+                </button>
+              </div>
             </div>
           </section>
 
-          {/* Danger Zone */}
-          <section className="flex flex-col gap-2">
-            <h3 className="text-white text-sm font-medium">Danger Zone</h3>
-            <button className="w-full flex flex-col items-center justify-center gap-0.5 px-4 py-3 rounded-xl border border-rose-500/50 bg-rose-900/20 text-rose-400 hover:bg-rose-900/30 transition-colors">
-              <span className="flex items-center gap-2 font-medium text-sm">
-                ⚠️ Close or Delete Bubble
-              </span>
-              <span className="text-rose-500 text-xs">Action cannot be undone.</span>
+          {/* Export Targets Configuration */}
+          <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
+            <h3 className="text-white text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Export Destinations on Pop
+            </h3>
+            <p className="text-[11px] text-slate-500">
+              Generated executive briefing is automatically dispatched to active targets before shredding.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {(["slack", "notion", "linear", "markdown"] as ExportTarget[]).map((tgt) => (
+                <button
+                  key={tgt}
+                  type="button"
+                  onClick={() => handleToggleExportTarget(tgt)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-xl border text-xs capitalize transition-colors ${
+                    exportsConfig[tgt]
+                      ? "border-emerald-500/40 bg-emerald-950/20 text-emerald-300 font-medium"
+                      : "border-white/10 bg-[#161d2e] text-slate-400"
+                  }`}
+                >
+                  <span>{tgt}</span>
+                  <span>{exportsConfig[tgt] ? "✓" : "+"}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Invite Code */}
+          <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-300 font-medium">Invite Code</span>
+              <span className="font-mono text-violet-300 text-xs font-semibold">{bubble.id}</span>
+            </div>
+            <button
+              onClick={handleCopyInviteLink}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-white/10 bg-[#161d2e] text-xs text-slate-200 hover:bg-[#1a2236] transition-colors"
+            >
+              {copied ? "✓ Copied invite URL!" : "Copy Invite Link"}
             </button>
           </section>
 
-          {/* Demo disclaimer */}
-          <p className="text-xs text-slate-600 italic border-t border-white/5 pt-3">
-            ⚠️ Demo only — none of these controls affect real data.
-          </p>
+          {/* Danger Zone: Pop Bubble */}
+          <section className="flex flex-col gap-2 pt-2 border-t border-rose-500/20">
+            <h3 className="text-rose-400 text-xs font-semibold uppercase tracking-wider">
+              Danger Zone
+            </h3>
+            <button
+              onClick={() => setShowPopModal(true)}
+              className="w-full flex flex-col items-center justify-center gap-1 px-4 py-3 rounded-xl border border-rose-500/40 bg-rose-950/20 text-rose-300 hover:bg-rose-900/30 transition-colors"
+            >
+              <span className="font-semibold text-sm flex items-center gap-1.5">
+                <span>💥</span> Pop &amp; Shred Bubble Now
+              </span>
+              <span className="text-[11px] text-rose-400/80">
+                Generates executive briefing, exports records, and shreds session.
+              </span>
+            </button>
+          </section>
         </div>
       </div>
+
+      {/* Pop Confirmation Modal */}
+      {showPopModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111827] border border-rose-500/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 text-xl">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="text-white font-bold text-base">Pop Context Bubble</h3>
+                <p className="text-slate-400 text-xs">
+                  This initiates the backend Pop State Machine and cryptographic destruction.
+                </p>
+              </div>
+            </div>
+
+            {/* Custom Briefing Prompt */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-slate-300 font-medium">
+                Custom Briefing Focus / Instructions (Optional)
+              </label>
+              <textarea
+                rows={2}
+                value={customBriefingPrompt}
+                onChange={(e) => setCustomBriefingPrompt(e.target.value)}
+                placeholder="e.g. Focus primarily on the pricing debate and unresolved risk factors..."
+                className="rounded-xl border border-white/10 bg-[#161d2e] p-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-violet-500 resize-none"
+              />
+            </div>
+
+            {/* Dry Run Checkbox */}
+            <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={popDryRun}
+                onChange={(e) => setPopDryRun(e.target.checked)}
+                className="rounded text-violet-600 focus:ring-0"
+              />
+              <span>Dry run test (generate briefing without deleting session data)</span>
+            </label>
+
+            {popStatusText && (
+              <div className="rounded-xl bg-violet-950/30 border border-violet-500/30 p-3 text-xs text-violet-300 font-mono">
+                {popStatusText}
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowPopModal(false)}
+                disabled={isPopping}
+                className="flex-1 py-2.5 rounded-xl border border-white/10 bg-[#161d2e] hover:bg-[#1a2236] text-slate-300 text-xs font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecutePop}
+                disabled={isPopping}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-semibold shadow-lg shadow-rose-900/40 transition-colors flex items-center justify-center gap-1.5"
+              >
+                {isPopping ? (
+                  <>
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    <span>Popping...</span>
+                  </>
+                ) : (
+                  <span>Confirm &amp; Pop Bubble</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

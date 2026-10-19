@@ -58,6 +58,19 @@ async def get_pop_status(
     }
 
 
+@router.get("/briefing")
+async def get_briefing(
+    bubble_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Returns the real executive briefing generated during pop."""
+    db = get_async_firestore_client()
+    snap = await db.collection("bubbles").document(bubble_id).collection("briefing").document("latest").get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Briefing not found for this bubble.")
+    return snap.to_dict()
+
+
 @router.post("/export-config")
 async def configure_export_target(
     bubble_id: str,

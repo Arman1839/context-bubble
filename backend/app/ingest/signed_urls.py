@@ -54,9 +54,10 @@ def generate_upload_signed_url(
         )
     except Exception as e:
         logger.warning(f"Could not generate real GCS signed URL (local/emulator): {e}")
-        signed_url = f"http://localhost:{settings.PORT}/api/v1/files/mock-upload/{bubble_id}/{file_id}"
+        signed_url = f"http://localhost:{settings.PORT}/api/v1/bubbles/{bubble_id}/files/mock-upload/{file_id}"
 
     return {
+
         "file_id": file_id,
         "object_name": object_name,
         "upload_url": signed_url,

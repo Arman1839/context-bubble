@@ -1,9 +1,25 @@
+import asyncio
+import os
+import sys
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+# Ensure backend root is always on sys.path
+_backend_dir = str(Path(__file__).resolve().parent.parent)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    HAS_OTEL_INSTRUMENTOR = True
+except ImportError:
+    FastAPIInstrumentor = None
+    HAS_OTEL_INSTRUMENTOR = False
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -11,6 +27,7 @@ from app.core.telemetry import init_telemetry
 from app.core.exceptions import BubbleException
 from app.services.firebase import init_firebase, get_async_firestore_client
 from app.api.v1 import api_v1_router
+
 
 
 @asynccontextmanager
@@ -44,7 +61,9 @@ app = FastAPI(
 )
 
 # OpenTelemetry Instrumentation
-FastAPIInstrumentor.instrument_app(app)
+if HAS_OTEL_INSTRUMENTOR and FastAPIInstrumentor:
+    FastAPIInstrumentor.instrument_app(app)
+
 
 # CORS Configuration
 app.add_middleware(
@@ -103,3 +122,9 @@ async def root():
         "status": "operational",
         "docs_url": "/docs",
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=True, app_dir=_backend_dir)
+

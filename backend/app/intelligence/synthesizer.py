@@ -28,6 +28,7 @@ class IntelligenceSynthesizer:
         self.budget_mgr = TokenBudgetManager(db)
 
     async def run_synthesis(self, bubble_id: str):
+        # pyrefly: ignore[missing-attribute]
         bubble_ref = self.db.collection("bubbles").document(bubble_id)
         bubble_doc = await bubble_ref.get()
         if not bubble_doc.exists:

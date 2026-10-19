@@ -1,3 +1,4 @@
+import os
 from typing import List, Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
 
     # Google Cloud & Firebase
     GOOGLE_CLOUD_PROJECT: str = "context-bubble-dev"
+    GOOGLE_APPLICATION_CREDENTIALS: str = Field(default="", description="Path to service account JSON key")
     FIRESTORE_DATABASE: str = "(default)"
     FIRESTORE_EMULATOR_HOST: str | None = None
     FIREBASE_STORAGE_EMULATOR_HOST: str | None = None
@@ -31,17 +33,24 @@ class Settings(BaseSettings):
     # LLM Settings
     LLM_PROVIDER: Literal["gemini", "anthropic"] = "gemini"
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")
-    GEMINI_MODEL: str = "gemini-3.8-flash"
-    GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"
+    GEMINI_MODEL: str = "gemini-flash-latest"
+    GEMINI_EMBEDDING_MODEL: str = "models/text-embedding-004"
 
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic Claude API key")
     ANTHROPIC_MODEL: str = "claude-3-5-sonnet-20241022"
+
+    # AssemblyAI
+    ASSEMBLYAI_API_KEY: str = Field(default="", description="AssemblyAI speech-to-text API key")
+
+    # Cloudinary (media & document storage with auto-expiration)
+    CLOUDINARY_CLOUD_NAME: str = Field(default="", description="Cloudinary cloud name")
+    CLOUDINARY_API_KEY: str = Field(default="", description="Cloudinary API key")
+    CLOUDINARY_API_SECRET: str = Field(default="", description="Cloudinary API secret")
 
     # Security & Verification
     FIREBASE_APP_CHECK_ENFORCE: bool = False
     SERVER_INTERNAL_SECRET: str = "dev-internal-secret-for-cloud-tasks-and-schedulers"
     REDIS_URL: str | None = None
-
 
     # Bubble Constraints & Debouncing
     BUBBLE_MAX_PARTICIPANTS: int = 10
@@ -53,3 +62,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Propagate service account path to os.environ so Firebase SDK / google-auth picks it up
+if settings.GOOGLE_APPLICATION_CREDENTIALS and os.path.exists(settings.GOOGLE_APPLICATION_CREDENTIALS):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.GOOGLE_APPLICATION_CREDENTIALS

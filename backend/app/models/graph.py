@@ -2,7 +2,7 @@ from typing import List, Literal, Optional, Dict
 from pydantic import BaseModel, Field
 
 
-NodeType = Literal["topic", "claim", "consensus", "blocker", "decision"]
+NodeType = Literal["topic", "claim", "consensus", "blocker", "decision", "debate", "action_item"]
 EdgeType = Literal["supports", "disputes", "depends_on", "resolves"]
 NodeStatus = Literal["consensus", "contested", "unresolved"]
 

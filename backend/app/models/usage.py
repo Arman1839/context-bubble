@@ -43,6 +43,7 @@ class ShredReceipt(BaseModel):
     host_id: str
     popped_at: datetime
     shredded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    retention_policy: str = "temporary"
     deleted_document_count: int
     deleted_storage_objects_count: int
     deleted_vectors_count: int

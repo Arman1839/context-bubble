@@ -16,14 +16,38 @@ from app.chat.ai_participant import AIParticipantHandler
 from app.intelligence.debounce import DebounceManager
 from app.intelligence.synthesizer import IntelligenceSynthesizer
 
+# Singleton AI participant handler — persists across requests so background tasks
+# are not garbage-collected when ChatService goes out of scope
+_ai_participant: Optional[AIParticipantHandler] = None
+_debounce_manager: Optional[DebounceManager] = None
+_synthesizer: Optional[IntelligenceSynthesizer] = None
+
+def get_ai_participant(db, llm) -> AIParticipantHandler:
+    global _ai_participant
+    if _ai_participant is None:
+        _ai_participant = AIParticipantHandler(db, llm)
+    return _ai_participant
+
+def get_debounce_manager(db) -> DebounceManager:
+    global _debounce_manager
+    if _debounce_manager is None:
+        _debounce_manager = DebounceManager(db)
+    return _debounce_manager
+
+def get_synthesizer(db, llm) -> IntelligenceSynthesizer:
+    global _synthesizer
+    if _synthesizer is None:
+        _synthesizer = IntelligenceSynthesizer(db, llm)
+    return _synthesizer
+
 
 class ChatService:
     def __init__(self, db: firestore.AsyncClient):
         self.db = db
         self.llm = get_llm_adapter()
-        self.ai_participant = AIParticipantHandler(db, self.llm)
-        self.synthesizer = IntelligenceSynthesizer(db, self.llm)
-        self.debounce = DebounceManager(db)
+        self.ai_participant = get_ai_participant(db, self.llm)
+        self.synthesizer = get_synthesizer(db, self.llm)
+        self.debounce = get_debounce_manager(db)
 
     async def join_bubble_transactional(
         self,
@@ -75,7 +99,20 @@ class ChatService:
             return BubbleMember(**{**member_data, "joined_at": datetime.now(timezone.utc), "last_seen_at": datetime.now(timezone.utc)})
 
         tx = self.db.transaction()
-        return await _join_tx(tx)
+        joined_member = await _join_tx(tx)
+
+        # Broadcast member join to SSE stream for all peers
+        try:
+            from app.intelligence.stream_manager import stream_manager
+            await stream_manager.broadcast(
+                bubble_id=bubble_id,
+                event_type="member_joined",
+                data=joined_member.model_dump(mode="json"),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to broadcast member_joined event: {e}")
+
+        return joined_member
 
     async def post_message_transactional(
         self,
@@ -146,6 +183,17 @@ class ChatService:
 
         tx = self.db.transaction()
         created_msg = await _post_msg_tx(tx)
+
+        # Broadcast message to live SSE stream for real-time peer synchronization
+        try:
+            from app.intelligence.stream_manager import stream_manager
+            await stream_manager.broadcast(
+                bubble_id=bubble_id,
+                event_type="message",
+                data=created_msg.model_dump(mode="json"),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to broadcast message event: {e}")
 
         # Trigger background processing
         # 1. Trigger Bubble AI participant check

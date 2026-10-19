@@ -1,12 +1,13 @@
 import asyncio
 import json
 import time
-from typing import Dict, Set, List, Optional
+from typing import Any, Dict, Set, List, Optional
 from app.models.insight import SSEStreamEvent
 from app.core.config import settings
 from app.core.logging import logger
 
 try:
+    # pyrefly: ignore[missing-import]
     import redis.asyncio as aioredis
     HAS_REDIS = True
 except ImportError:
@@ -30,7 +31,7 @@ class StreamManager:
         self.history_buffer_size = history_buffer_size
         self._event_counter = 0
 
-        self._redis: Optional[any] = None
+        self._redis: Optional[Any] = None
         self._pubsub_task: Optional[asyncio.Task] = None
         self._is_redis_ready = False
 
@@ -41,6 +42,7 @@ class StreamManager:
             return
 
         try:
+            assert aioredis is not None
             self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
             await self._redis.ping()
             self._is_redis_ready = True
@@ -113,7 +115,8 @@ class StreamManager:
         # If Redis is active, publish to channel so all cluster nodes receive it
         if self._is_redis_ready and self._redis:
             try:
-                payload = json.dumps(event.model_dump())
+                # Use mode="json" to serialise datetime/UUID/etc. to JSON-safe primitives
+                payload = json.dumps(event.model_dump(mode="json"), default=str)
                 await self._redis.publish(f"bubble_stream:{bubble_id}", payload)
                 return
             except Exception as e:

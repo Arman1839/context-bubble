@@ -120,11 +120,33 @@ async def get_bubble(
     members_snap = await db.collection("bubbles").document(bubble_id).collection("participants").get()
     members = [BubbleMember(**m.to_dict()) for m in members_snap]
 
+    # Fetch latest intelligence snapshot
+    intel_snap = await db.collection("bubbles").document(bubble_id).collection("intelligence").document("latest").get()
+    intelligence = None
+    if intel_snap.exists:
+        intelligence = intel_snap.to_dict() or {}
+
+    exp = data.get("expires_at")
+    if isinstance(exp, str):
+        try:
+            exp = datetime.fromisoformat(exp)
+        except Exception:
+            exp = None
+
+    cat = data.get("created_at")
+    if isinstance(cat, str):
+        try:
+            cat = datetime.fromisoformat(cat)
+        except Exception:
+            cat = datetime.now(timezone.utc)
+    elif not isinstance(cat, datetime):
+        cat = datetime.now(timezone.utc)
+
     return BubbleResponse(
         id=bubble_id,
         title=data.get("title", ""),
         is_live=data.get("is_live", True),
-        expires_at=data.get("expires_at"),
+        expires_at=exp,
         member_count=data.get("member_count", len(members)),
         members=members,
         retention_policy=data.get("retention_policy", "temporary"),
@@ -133,7 +155,8 @@ async def get_bubble(
         pop_state=data.get("pop_state", "ACTIVE"),
         trigger_mode=data.get("trigger_mode", "mention"),
         e2ee_enabled=data.get("e2ee_enabled", False),
-        created_at=data.get("created_at") or datetime.now(timezone.utc),
+        created_at=cat,
+        intelligence=intelligence,
     )
 
 

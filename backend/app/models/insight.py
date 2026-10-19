@@ -48,6 +48,7 @@ class Intelligence(BaseModel):
 
 class SSEStreamEvent(BaseModel):
     event_id: str
-    event_type: Literal["token", "delta", "complete", "graph", "error", "ping"]
+    event_type: str
     data: dict
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+

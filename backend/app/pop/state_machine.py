@@ -33,9 +33,13 @@ class PopStateMachine:
         actor_id: str,
         req: Optional[PopBubbleRequest] = None,
         is_timer_expiry: bool = False,
-    ) -> PopState:
+    ) -> str:
+        # pyrefly: ignore[missing-attribute]
         bubble_ref = self.db.collection("bubbles").document(bubble_id)
         req = req or PopBubbleRequest()
+
+        # Determine the pop reason for display
+        pop_reason = "timer_expired" if is_timer_expiry else "host_action"
 
         # Step 1: Atomic state transition ACTIVE -> POPPING
         @firestore.async_transactional
@@ -50,25 +54,36 @@ class PopStateMachine:
                 logger.info(f"Pop already in progress for {bubble_id}: state={cur_state}")
                 return data
 
+            # pyrefly: ignore[missing-attribute]
             transaction.update(bubble_ref, {
                 "pop_state": "POPPING",
                 "is_live": False,
+                "pop_reason": pop_reason,
                 "updated_at": firestore.SERVER_TIMESTAMP,
             })
             data["pop_state"] = "POPPING"
             return data
 
+        # pyrefly: ignore[missing-attribute]
         tx = self.db.transaction()
         bubble_data = await _transition_to_popping(tx)
         cur_state = bubble_data.get("pop_state")
         if cur_state not in ("POPPING", "FAILED_EXPORT"):
             return cur_state
 
-        # Broadcast popping event to connected clients over SSE
+        # Read retention policy from bubble data
+        retention_policy = bubble_data.get("retention_policy", "temporary")
+
+        # Broadcast popping event with reason + retention info to all connected members
         await stream_manager.broadcast(
             bubble_id=bubble_id,
             event_type="delta",
-            data={"type": "pop_state_change", "status": "POPPING"}
+            data={
+                "type": "pop_state_change",
+                "status": "POPPING",
+                "pop_reason": pop_reason,
+                "retention_policy": retention_policy,
+            }
         )
 
         # Step 2: Assemble session transcript for Executive Briefing
@@ -93,8 +108,26 @@ class PopStateMachine:
         )
         pdf_bytes = self.briefing_gen.render_pdf(briefing)
 
+        # Persist the briefing to Firestore so the frontend can fetch it after pop
+        try:
+            await bubble_ref.collection("briefing").document("latest").set(
+                briefing.model_dump(mode="json")
+            )
+        except Exception as e:
+            logger.warning(f"Could not persist briefing for {bubble_id}: {e}")
+
         # Step 3: Transition to EXPORTING
         await bubble_ref.update({"pop_state": "EXPORTING"})
+        await stream_manager.broadcast(
+            bubble_id=bubble_id,
+            event_type="delta",
+            data={
+                "type": "pop_state_change",
+                "status": "EXPORTING",
+                "pop_reason": pop_reason,
+                "retention_policy": retention_policy,
+            }
+        )
 
         # Load export configurations
         export_configs_snap = await bubble_ref.collection("export_configs").get()
@@ -126,16 +159,57 @@ class PopStateMachine:
             await stream_manager.broadcast(
                 bubble_id=bubble_id,
                 event_type="delta",
-                data={"type": "pop_state_change", "status": "FAILED_EXPORT"}
+                data={"type": "pop_state_change", "status": "FAILED_EXPORT", "pop_reason": pop_reason}
             )
             return "FAILED_EXPORT"
 
-        # Step 5: Transition to SHREDDING -> hard delete & crypto destruction
+        # Step 5: Retention-policy-aware shredding
+        if retention_policy == "permanent":
+            # Permanent: keep ALL data, just mark as POPPED — no shredding
+            logger.info(f"Bubble {bubble_id} has permanent retention — skipping shredding, keeping all data.")
+            await bubble_ref.update({
+                "pop_state": "POPPED",
+                "popped_at": firestore.SERVER_TIMESTAMP,
+                "pop_reason": pop_reason,
+                "retention_policy": retention_policy,
+            })
+            await stream_manager.broadcast(
+                bubble_id=bubble_id,
+                event_type="delta",
+                data={
+                    "type": "pop_state_change",
+                    "status": "POPPED",
+                    "pop_reason": pop_reason,
+                    "retention_policy": retention_policy,
+                    "message": "Session ended. All data is retained for permanent reference.",
+                }
+            )
+            return "POPPED"
+
+        # For temporary and temporary-plus-record: proceed to SHREDDING
         await bubble_ref.update({"pop_state": "SHREDDING"})
+        await stream_manager.broadcast(
+            bubble_id=bubble_id,
+            event_type="delta",
+            data={
+                "type": "pop_state_change",
+                "status": "SHREDDING",
+                "pop_reason": pop_reason,
+                "retention_policy": retention_policy,
+            }
+        )
+
         receipt: ShredReceipt = await self.shredder.execute_shredding(
             bubble_id=bubble_id,
             host_id=bubble_data.get("host_id", actor_id),
+            retention_policy=retention_policy,
         )
+
+        # Build appropriate message based on retention policy
+        if retention_policy == "temporary-plus-record":
+            pop_message = "Session data has been shredded. Executive briefing and export records are retained."
+        else:
+            pop_message = "All session data has been permanently crypto-shredded."
 
         await stream_manager.broadcast(
             bubble_id=bubble_id,
@@ -144,6 +218,9 @@ class PopStateMachine:
                 "type": "pop_state_change",
                 "status": "POPPED",
                 "receipt_id": receipt.receipt_id,
+                "pop_reason": pop_reason,
+                "retention_policy": retention_policy,
+                "message": pop_message,
             }
         )
 

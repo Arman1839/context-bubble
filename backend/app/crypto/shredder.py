@@ -14,6 +14,7 @@ from app.services.firebase import get_storage_client
 SUBCOLLECTIONS_TO_SHRED = [
     "messages",
     "contributions",
+    "ai_responses",
     "chunks",
     "files",
     "graph",
@@ -21,18 +22,49 @@ SUBCOLLECTIONS_TO_SHRED = [
     "participants",
 ]
 
+# For "temporary-plus-record": shred session data but KEEP intelligence, exports, and briefing
+SUBCOLLECTIONS_KEEP_FOR_RECORD = {
+    "intelligence",
+    "exports",
+    "export_configs",
+}
+
+# Subcollections to shred in "temporary-plus-record" mode
+SUBCOLLECTIONS_SHRED_KEEP_RECORD = [
+    s for s in SUBCOLLECTIONS_TO_SHRED if s not in SUBCOLLECTIONS_KEEP_FOR_RECORD
+]
+
 
 class CryptoShredder:
     def __init__(self, db: firestore.AsyncClient):
         self.db = db
 
-    async def execute_shredding(self, bubble_id: str, host_id: str) -> ShredReceipt:
-        logger.info(f"Initiating crypto-shredding for bubble {bubble_id}")
+    async def execute_shredding(
+        self,
+        bubble_id: str,
+        host_id: str,
+        retention_policy: str = "temporary",
+    ) -> ShredReceipt:
+        logger.info(f"Initiating crypto-shredding for bubble {bubble_id} (retention={retention_policy})")
         bubble_ref = self.db.collection("bubbles").document(bubble_id)
 
-        # 1. Hard-delete all documents across all subcollections
+        # Select subcollections to shred based on retention policy
+        if retention_policy == "permanent":
+            # Permanent retention: don't shred any subcollections
+            subcols_to_shred = []
+            logger.info(f"Bubble {bubble_id}: permanent retention — keeping all data.")
+        elif retention_policy == "temporary-plus-record":
+            # Keep intelligence + exports, shred session data
+            subcols_to_shred = SUBCOLLECTIONS_SHRED_KEEP_RECORD
+            logger.info(f"Bubble {bubble_id}: temporary-plus-record — shredding session data, keeping intelligence + exports.")
+        else:
+            # "temporary": full shred
+            subcols_to_shred = SUBCOLLECTIONS_TO_SHRED
+            logger.info(f"Bubble {bubble_id}: temporary retention — full crypto-shred.")
+
+        # 1. Hard-delete documents across selected subcollections
         deleted_docs_count = 0
-        for subcol_name in SUBCOLLECTIONS_TO_SHRED:
+        for subcol_name in subcols_to_shred:
             subcol_ref = bubble_ref.collection(subcol_name)
             docs = await subcol_ref.limit(500).get()
             while docs:
@@ -72,6 +104,14 @@ class CryptoShredder:
         except Exception as e:
             logger.warning(f"Local storage shred error for bubble {bubble_id}: {e}")
 
+        # 2c. Delete Cloudinary assets tagged with bubble_{bubble_id}
+        try:
+            from app.ingest.cloudinary_storage import delete_bubble_assets
+            cloudinary_deleted = await delete_bubble_assets(bubble_id)
+            deleted_storage_count += cloudinary_deleted
+        except Exception as e:
+            logger.warning(f"Cloudinary shred warning for bubble {bubble_id}: {e}")
+
 
         # 3. Destroy key material documents in _crypto_keys collection
         key_doc_ref = self.db.collection("_crypto_keys").document(bubble_id)
@@ -83,16 +123,30 @@ class CryptoShredder:
         lock_doc_ref = self.db.collection("_distributed_locks").document(f"synth_{bubble_id}")
         await lock_doc_ref.delete()
 
-        # 5. Update bubble root doc to POPPED state and purge title/metadata
+        # 5. Update bubble root doc to POPPED state and purge title/metadata appropriately
         now = datetime.now(timezone.utc)
-        await bubble_ref.set({
-            "id": bubble_id,
-            "title": "[SHREDDED_BUBBLE]",
-            "pop_state": "POPPED",
-            "is_live": False,
-            "popped_at": now,
-            "shredded_at": now,
-        })
+        if retention_policy == "temporary-plus-record":
+            # Keep title for record reference
+            await bubble_ref.update({
+                "pop_state": "POPPED",
+                "is_live": False,
+                "popped_at": now,
+                "shredded_at": now,
+                "retention_policy": retention_policy,
+            })
+        else:
+            # Full purge — replace title with shredded marker
+            await bubble_ref.set({
+                "id": bubble_id,
+                "title": "[SHREDDED_BUBBLE]",
+                "pop_state": "POPPED",
+                "is_live": False,
+                "host_id": host_id,
+                "expires_at": now,
+                "popped_at": now,
+                "shredded_at": now,
+                "retention_policy": retention_policy,
+            })
 
         # 6. Verify shredding: confirm that querying subcollections returns 0
         for subcol_name in SUBCOLLECTIONS_TO_SHRED:
@@ -102,7 +156,7 @@ class CryptoShredder:
 
         # 7. Generate cryptographically signed deletion receipt (HMAC-SHA256)
         receipt_id = f"rcpt_{uuid.uuid4().hex[:16]}"
-        signature_material = f"{receipt_id}:{bubble_id}:{host_id}:{now.isoformat()}"
+        signature_material = f"{receipt_id}:{bubble_id}:{host_id}:{now.isoformat()}:{retention_policy}"
         signature = hmac.new(
             settings.SERVER_INTERNAL_SECRET.encode("utf-8"),
             signature_material.encode("utf-8"),
@@ -115,6 +169,7 @@ class CryptoShredder:
             host_id=host_id,
             popped_at=now,
             shredded_at=now,
+            retention_policy=retention_policy,
             deleted_document_count=deleted_docs_count,
             deleted_storage_objects_count=deleted_storage_count,
             deleted_vectors_count=deleted_docs_count,

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import List, Literal, Optional, Any
+from pydantic import BaseModel, Field, field_validator
 
 
 MessageType = Literal["user", "ai", "system"]
@@ -31,6 +31,18 @@ class Message(BaseModel):
     idempotency_key: Optional[str] = None
     tokens_consumed: Optional[int] = None
 
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def sanitize_created_at(cls, v: Any) -> datetime:
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v)
+            except Exception:
+                pass
+        return datetime.now(timezone.utc)
+
 
 class PostMessageRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000)
@@ -51,6 +63,18 @@ class Contribution(BaseModel):
     attachments: Optional[List[Attachment]] = None
     extracted_text: Optional[str] = None
     source_type: Literal["chat", "voice_transcript", "document_ocr", "link_extract"] = "chat"
+
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def sanitize_timestamp(cls, v: Any) -> datetime:
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v)
+            except Exception:
+                pass
+        return datetime.now(timezone.utc)
 
 
 class PresenceUpdate(BaseModel):

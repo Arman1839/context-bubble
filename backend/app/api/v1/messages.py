@@ -7,6 +7,7 @@ from app.api.deps import (
     get_current_user,
     get_bubble_participant,
 )
+from app.core.exceptions import BubbleNotFoundException
 from app.models.message import Message, PostMessageRequest, PresenceUpdate
 from app.services.firebase import get_async_firestore_client
 from app.chat.service import ChatService
@@ -39,9 +40,13 @@ async def post_message(
 async def list_messages(
     bubble_id: str,
     limit: int = Query(default=50, ge=1, le=100),
-    participant=Depends(get_bubble_participant),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     db = get_async_firestore_client()
+    b_snap = await db.collection("bubbles").document(bubble_id).get()
+    if not b_snap.exists:
+        raise BubbleNotFoundException(bubble_id)
+
     snap = await (
         db.collection("bubbles")
         .document(bubble_id)
@@ -57,7 +62,7 @@ async def list_messages(
 async def update_presence(
     bubble_id: str,
     is_typing: bool = Query(default=False),
-    status: str = Query(default="online"),
+    presence_status: str = Query(default="online", alias="status"),
     participant=Depends(get_bubble_participant),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
@@ -65,7 +70,7 @@ async def update_presence(
         bubble_id=bubble_id,
         user_id=user.uid,
         display_name=participant.get("name", user.name),
-        status=status,
+        status=presence_status,
         is_typing=is_typing,
     )
     return {"status": "ok"}

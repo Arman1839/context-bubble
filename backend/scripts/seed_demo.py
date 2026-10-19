@@ -20,7 +20,7 @@ from app.models.insight import Insight
 
 
 async def seed_demo():
-    print("🌱 Connecting to Firestore to seed 'demo' bubble...")
+    print("[*] Connecting to Firestore to seed 'demo' bubble...")
     db = get_async_firestore_client()
     llm = get_llm_adapter()
     rag = RAGPipeline(db, llm)
@@ -51,7 +51,7 @@ async def seed_demo():
         "updated_at": now,
     }
     await bubble_ref.set(bubble_data)
-    print("✓ Created root bubble document")
+    print("[+] Created root bubble document")
 
     # 2. Participants
     members = [
@@ -68,7 +68,7 @@ async def seed_demo():
             "joined_at": now - timedelta(minutes=12),
             "last_seen_at": now,
         })
-    print(f"✓ Seeded {len(members)} participants")
+    print(f"[+] Seeded {len(members)} participants")
 
     # 3. Contributions and Messages
     contributions = [
@@ -161,7 +161,7 @@ async def seed_demo():
             extra_metadata={"author": c["author_name"]}
         )
 
-    print(f"✓ Seeded and vector-indexed {len(contributions)} contributions")
+    print(f"[+] Seeded and vector-indexed {len(contributions)} contributions")
 
     # 4. Intelligence Document
     raw_insights = [
@@ -219,13 +219,13 @@ async def seed_demo():
         "updated_at": firestore.SERVER_TIMESTAMP,
     }
     await bubble_ref.collection("intelligence").document("latest").set(intel_data)
-    print("✓ Seeded intelligence summary and insights")
+    print("[+] Seeded intelligence summary and insights")
 
     # 5. Knowledge Graph
     await graph_svc.update_graph_from_insights(bubble_id, raw_insights)
-    print("✓ Seeded React Flow knowledge graph")
+    print("[+] Seeded React Flow knowledge graph")
 
-    print("\n🎉 Seed complete! Bubble 'demo' is ready at /api/v1/bubbles/demo")
+    print("\n[SUCCESS] Seed complete! Bubble 'demo' is ready at /api/v1/bubbles/demo")
 
 
 if __name__ == "__main__":

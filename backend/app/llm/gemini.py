@@ -1,7 +1,9 @@
+import asyncio
 import json
 from typing import AsyncIterator, List, Optional, Type, TypeVar
 from pydantic import BaseModel
 try:
+    # pyrefly: ignore[missing-import]
     from google import genai
     from google.genai import types
     HAS_GENAI = True
@@ -15,6 +17,27 @@ from app.core.logging import logger
 from app.llm.base import LLMAdapter, LLMResponse
 
 T = TypeVar("T", bound=BaseModel)
+
+# How many times to retry on 503 UNAVAILABLE before giving up
+_RETRY_ATTEMPTS = 4
+_RETRY_DELAY_SECONDS = 3.0
+
+async def _with_retry(coro_fn, label: str = "Gemini call"):
+    """Retry an async coroutine on 503 UNAVAILABLE errors."""
+    last_exc = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return await coro_fn()
+        except Exception as e:
+            msg = str(e)
+            if "503" in msg or "UNAVAILABLE" in msg:
+                wait = _RETRY_DELAY_SECONDS * (attempt + 1)
+                logger.warning(f"{label} got 503, retrying in {wait:.0f}s (attempt {attempt+1}/{_RETRY_ATTEMPTS})")
+                await asyncio.sleep(wait)
+                last_exc = e
+            else:
+                raise
+    raise last_exc
 
 
 class GeminiAdapter(LLMAdapter):
@@ -67,14 +90,31 @@ class GeminiAdapter(LLMAdapter):
             config_dict["system_instruction"] = system_prompt
         if response_schema:
             config_dict["response_mime_type"] = "application/json"
-            config_dict["response_schema"] = response_schema
+            try:
+                schema = response_schema.model_json_schema()
+                def _strip_defaults(obj):
+                    if isinstance(obj, dict):
+                        obj.pop("default", None)
+                        for v in obj.values():
+                            _strip_defaults(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            _strip_defaults(item)
+                    return obj
+                clean_schema = _strip_defaults(schema)
+                config_dict["response_schema"] = clean_schema
+            except Exception:
+                config_dict["response_schema"] = response_schema
 
         config = types.GenerateContentConfig(**config_dict)
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model_name,
-            contents=prompt,
-            config=config,
+        response = await _with_retry(
+            lambda: self._client.aio.models.generate_content(
+                model=self._model_name,
+                contents=prompt,
+                config=config,
+            ),
+            label=f"Gemini generate ({self._model_name})"
         )
 
         content = response.text or ""
@@ -120,13 +160,25 @@ class GeminiAdapter(LLMAdapter):
 
         config = types.GenerateContentConfig(**config_dict)
 
-        async for chunk in await self._client.aio.models.generate_content_stream(
-            model=self._model_name,
-            contents=prompt,
-            config=config,
-        ):
-            if chunk.text:
-                yield chunk.text
+        # Retry on 503 by re-requesting the full stream
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                async for chunk in await self._client.aio.models.generate_content_stream(
+                    model=self._model_name,
+                    contents=prompt,
+                    config=config,
+                ):
+                    if chunk.text:
+                        yield chunk.text
+                return  # stream completed successfully
+            except Exception as e:
+                msg = str(e)
+                if ("503" in msg or "UNAVAILABLE" in msg) and attempt < _RETRY_ATTEMPTS - 1:
+                    wait = _RETRY_DELAY_SECONDS * (attempt + 1)
+                    logger.warning(f"Gemini stream got 503, retrying in {wait:.0f}s (attempt {attempt+1}/{_RETRY_ATTEMPTS})")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
         if not texts:
@@ -143,13 +195,24 @@ class GeminiAdapter(LLMAdapter):
             return embeddings
 
         results = []
-        for text in texts:
-            response = await self._client.aio.models.embed_content(
-                model=self._embedding_model,
-                contents=text,
-            )
-            results.append(response.embedding.values)
-        return results
+        try:
+            for text in texts:
+                response = await self._client.aio.models.embed_content(
+                    model=self._embedding_model,
+                    contents=text,
+                )
+                results.append(response.embedding.values)
+            return results
+        except Exception as e:
+            logger.warning(f"Gemini embedding API call failed ({e}). Falling back to local deterministic embeddings.")
+            import hashlib
+            embeddings = []
+            for t in texts:
+                h = int(hashlib.md5(t.encode("utf-8")).hexdigest(), 16)
+                emb = [((h >> (i % 64)) & 1) * 0.1 for i in range(768)]
+                embeddings.append(emb)
+            return embeddings
+
 
     def _mock_generate(self, prompt: str, schema: Optional[Type[BaseModel]]) -> str:
         if schema and "ExecutiveBriefing" in schema.__name__:
