@@ -11,6 +11,7 @@ import type {
   ExportTarget,
   ExportRecord,
   Intelligence,
+  ExecutiveBriefing,
 } from "@/types";
 
 export const BACKEND_URL =
@@ -68,6 +69,9 @@ export interface BubbleResponseRaw {
   trigger_mode: AITriggerMode;
   e2ee_enabled: boolean;
   created_at: string;
+  expiry_decision_deadline?: string | null;
+  view_until?: string | null;
+  intelligence?: Intelligence | null;
 }
 
 export interface JoinBubblePayload {
@@ -200,6 +204,9 @@ export async function popBubble(
     force_shred_on_export_failure?: boolean;
     dry_run?: boolean;
     custom_briefing_prompt?: string;
+    retention_policy?: RetentionPolicy;
+    share_decision_record?: boolean;
+    view_retention_days?: number;
   }
 ): Promise<{ status: string; pop_state: PopState }> {
   const headers = await getAuthHeaders();
@@ -214,6 +221,24 @@ export async function popBubble(
     throw new Error(errData.detail || errData.error?.message || `Failed to pop bubble (${res.status})`);
   }
 
+  return res.json();
+}
+
+export interface BubbleHistoryEntry {
+  bubble_id: string;
+  title: string;
+  popped_at: string;
+  pop_reason: string;
+  retention_policy: RetentionPolicy;
+  view_until?: string | null;
+  is_viewable: boolean;
+  decision_record_shared: boolean;
+}
+
+export async function getBubbleHistory(): Promise<BubbleHistoryEntry[]> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/history`, { headers });
+  if (!res.ok) throw new Error("Could not load previous bubbles.");
   return res.json();
 }
 
@@ -240,6 +265,10 @@ export async function getPopStatus(
   bubble_id: string;
   pop_state: PopState;
   popped_at?: string;
+  pop_reason?: string;
+  retention_policy?: RetentionPolicy;
+  expiry_decision_deadline?: string | null;
+  view_until?: string | null;
   exports: ExportRecord[];
 }> {
   const headers = await getAuthHeaders();
@@ -335,6 +364,23 @@ export async function updatePresence(
   return res.json();
 }
 
+export interface ActivePresence {
+  user_id: string;
+  display_name: string;
+  status: "online" | "away" | "offline";
+  is_typing: boolean;
+}
+
+export async function getActivePresence(bubbleId: string): Promise<ActivePresence[]> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch(
+    `${BACKEND_URL}/api/v1/bubbles/${bubbleId}/messages/presence/active`,
+    { headers },
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
 /**
  * Handles direct file upload to the backend (which uploads to Cloudinary),
  * extracts text, indexes in RAG, and triggers AI document review.
@@ -382,11 +428,12 @@ export interface SSECallbacks {
   onToken?: (token: string, seq?: number) => void;
   onAIToken?: (token: string) => void;
   onAIComplete?: (text: string) => void;
+  onAIError?: (message: string) => void;
   onDelta?: (delta: Record<string, unknown>) => void;
   onComplete?: (intelligence: Intelligence) => void;
   onGraph?: (graph: KnowledgeGraph) => void;
   onPresence?: (presence: { user_id: string; display_name: string; is_typing: boolean; status: string }) => void;
-  onPopState?: (state: PopState, receiptId?: string, popReason?: string, retentionPolicy?: string, message?: string) => void;
+  onPopState?: (state: PopState, receiptId?: string, popReason?: string, retentionPolicy?: string, message?: string, expiryDecisionDeadline?: string) => void;
   onMessage?: (message: any) => void;
   onMemberJoined?: (member: any) => void;
   onError?: (error: Event) => void;
@@ -468,6 +515,15 @@ export function subscribeToBubbleStream(
     }
   });
 
+  eventSource.addEventListener("ai_error", (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      callbacks.onAIError?.(data.message || "Bubble AI could not generate a response.");
+    } catch {
+      callbacks.onAIError?.("Bubble AI could not generate a response.");
+    }
+  });
+
   eventSource.addEventListener("delta", (e) => {
     try {
       const data = JSON.parse(e.data);
@@ -477,7 +533,8 @@ export function subscribeToBubbleStream(
           data.receipt_id,
           data.pop_reason,
           data.retention_policy,
-          data.message
+          data.message,
+          data.expiry_decision_deadline
         );
       } else {
         callbacks.onDelta?.(data);

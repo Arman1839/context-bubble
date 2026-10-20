@@ -4,9 +4,10 @@ from pydantic import BaseModel, Field
 
 
 Role = Literal["host", "participant"]
-RetentionPolicy = Literal["temporary", "temporary-plus-record", "permanent"]
+RetentionPolicy = Literal["temporary", "temporary-plus-record", "permanent", "view-only"]
 PopState = Literal[
     "ACTIVE",
+    "EXPIRY_PENDING",
     "POPPING",
     "EXPORTING",
     "SHREDDING",
@@ -43,6 +44,8 @@ class Bubble(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     popped_at: Optional[datetime] = None
+    expiry_decision_deadline: Optional[datetime] = None
+    view_until: Optional[datetime] = None
 
 
 class CreateBubbleRequest(BaseModel):
@@ -84,3 +87,5 @@ class BubbleResponse(BaseModel):
     e2ee_enabled: bool = False
     created_at: Optional[datetime] = None
     intelligence: Optional[Dict[str, Any]] = None
+    expiry_decision_deadline: Optional[datetime] = None
+    view_until: Optional[datetime] = None

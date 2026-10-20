@@ -16,11 +16,13 @@ def get_llm_adapter() -> LLMAdapter:
     provider = settings.LLM_PROVIDER.lower()
     if provider == "anthropic":
         primary = AnthropicAdapter()
-        fallback = GeminiAdapter()
+        secondary = GeminiAdapter()
     else:
         primary = GeminiAdapter()
-        fallback = AnthropicAdapter()
+        secondary = AnthropicAdapter()
 
+    # Never treat a mock adapter as a real production fallback.
+    fallback = secondary if getattr(secondary, "_client", None) is not None else None
     _current_adapter = ResilientLLMAdapter(primary=primary, fallback=fallback)
     return _current_adapter
 

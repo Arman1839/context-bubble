@@ -105,6 +105,28 @@ async def join_bubble(
     return member
 
 
+@router.get("/history")
+async def list_bubble_history(user: AuthenticatedUser = Depends(get_current_user)):
+    """List bubbles attended by this user, including non-viewable tombstones."""
+    db = get_async_firestore_client()
+    docs = await db.collection("user_bubble_history").document(user.uid).collection("bubbles").get()
+    rows = [doc.to_dict() or {} for doc in docs]
+    rows.sort(key=lambda row: row.get("popped_at", ""), reverse=True)
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        until = row.get("view_until")
+        if isinstance(until, str):
+            try:
+                until = datetime.fromisoformat(until)
+            except ValueError:
+                until = None
+        if until and until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        if row.get("retention_policy") == "view-only" and until and until <= now:
+            row["is_viewable"] = False
+    return rows
+
+
 @router.get("/{bubble_id}", response_model=BubbleResponse)
 async def get_bubble(
     bubble_id: str,
@@ -116,6 +138,24 @@ async def get_bubble(
         raise BubbleNotFoundException(bubble_id)
 
     data = snap.to_dict() or {}
+    if data.get("pop_state") == "POPPED":
+        history_snap = await (
+            db.collection("user_bubble_history").document(user.uid)
+            .collection("bubbles").document(bubble_id).get()
+        )
+        history = history_snap.to_dict() or {}
+        if not history_snap.exists or not history.get("is_viewable"):
+            raise BubbleNotFoundException(bubble_id)
+        until = data.get("view_until")
+        if isinstance(until, str):
+            try:
+                until = datetime.fromisoformat(until)
+            except ValueError:
+                until = None
+        if until and until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        if until and until <= datetime.now(timezone.utc):
+            raise BubbleNotFoundException(bubble_id)
     # Fetch members list
     members_snap = await db.collection("bubbles").document(bubble_id).collection("participants").get()
     members = [BubbleMember(**m.to_dict()) for m in members_snap]
@@ -157,6 +197,8 @@ async def get_bubble(
         e2ee_enabled=data.get("e2ee_enabled", False),
         created_at=cat,
         intelligence=intelligence,
+        expiry_decision_deadline=data.get("expiry_decision_deadline"),
+        view_until=data.get("view_until"),
     )
 
 
@@ -173,7 +215,19 @@ async def extend_bubble(
         raise BubbleNotFoundException(bubble_id)
 
     data = snap.to_dict() or {}
-    if data.get("pop_state") != "ACTIVE":
+    pop_state = data.get("pop_state", "ACTIVE")
+    if pop_state == "EXPIRY_PENDING":
+        deadline = data.get("expiry_decision_deadline")
+        if isinstance(deadline, str):
+            try:
+                deadline = datetime.fromisoformat(deadline)
+            except ValueError:
+                deadline = None
+        if deadline and deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        if deadline and deadline < datetime.now(timezone.utc):
+            raise BubblePoppedException(bubble_id)
+    elif pop_state != "ACTIVE":
         raise BubblePoppedException(bubble_id)
 
     cur_expires: datetime = data.get("expires_at")
@@ -181,6 +235,9 @@ async def extend_bubble(
 
     await bubble_ref.update({
         "expires_at": new_expires,
+        "pop_state": "ACTIVE",
+        "is_live": True,
+        "expiry_decision_deadline": None,
         "updated_at": firestore.SERVER_TIMESTAMP,
     })
 

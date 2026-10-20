@@ -33,11 +33,11 @@ class Settings(BaseSettings):
     # LLM Settings
     LLM_PROVIDER: Literal["gemini", "anthropic"] = "gemini"
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")
-    GEMINI_MODEL: str = "gemini-flash-latest"
-    GEMINI_EMBEDDING_MODEL: str = "models/text-embedding-004"
+    GEMINI_MODEL: str = "gemini-flash-lite-latest"
+    GEMINI_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
 
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic Claude API key")
-    ANTHROPIC_MODEL: str = "claude-3-5-sonnet-20241022"
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
 
     # AssemblyAI
     ASSEMBLYAI_API_KEY: str = Field(default="", description="AssemblyAI speech-to-text API key")

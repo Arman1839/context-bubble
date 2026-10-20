@@ -124,6 +124,15 @@ async def root():
     }
 
 
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "Context Bubble Backend",
+        "version": "0.1.0",
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=True, app_dir=_backend_dir)

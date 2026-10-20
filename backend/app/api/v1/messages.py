@@ -40,7 +40,7 @@ async def post_message(
 async def list_messages(
     bubble_id: str,
     limit: int = Query(default=50, ge=1, le=100),
-    user: AuthenticatedUser = Depends(get_current_user),
+    participant=Depends(get_bubble_participant),
 ):
     db = get_async_firestore_client()
     b_snap = await db.collection("bubbles").document(bubble_id).get()
@@ -74,3 +74,12 @@ async def update_presence(
         is_typing=is_typing,
     )
     return {"status": "ok"}
+
+
+@router.get("/presence/active", response_model=List[PresenceUpdate])
+async def list_active_presence(
+    bubble_id: str,
+    participant=Depends(get_bubble_participant),
+):
+    """Return participants with a recent heartbeat for the bubble."""
+    return presence_manager.get_active_members(bubble_id)

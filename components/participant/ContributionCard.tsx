@@ -5,6 +5,7 @@ import type { Contribution } from "@/types";
 
 interface Props {
   contribution: Contribution;
+  hideAttachments?: boolean;
 }
 
 function computeTimeAgo(date: Date): string {
@@ -18,8 +19,9 @@ function computeTimeAgo(date: Date): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-export function ContributionCard({ contribution }: Props) {
+export function ContributionCard({ contribution, hideAttachments = false }: Props) {
   const isAnon = contribution.isAnonymous;
+  const isAI = contribution.authorId === "bubble-ai" || contribution.authorName === "Bubble AI";
 
   // Compute relative timestamp dynamically on client
   const [timeAgo, setTimeAgo] = useState<string>(() => computeTimeAgo(contribution.timestamp));
@@ -37,14 +39,22 @@ export function ContributionCard({ contribution }: Props) {
   return (
     <div
       className={`rounded-xl p-3.5 flex gap-3 border transition-colors ${
-        isAnon
+        isAI
+          ? "bg-gradient-to-br from-violet-950/35 via-[#181a2e] to-[#141829] border-violet-500/35 shadow-[0_0_20px_rgba(139,92,246,0.08)]"
+          : isAnon
           ? "bg-[#1a1f2e] border-slate-600/40"
           : "bg-[#161d2e] border-white/5 hover:border-white/10"
       }`}
     >
       {/* Avatar */}
       <div className="shrink-0 mt-0.5">
-        {isAnon ? (
+        {isAI ? (
+          <div className="w-10 h-10 rounded-full bg-violet-600/20 border border-violet-400/40 flex items-center justify-center text-violet-300 shadow-[0_0_10px_rgba(139,92,246,0.3)]">
+            <svg className="w-5 h-5 text-violet-300" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7H11V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2M7.5 13A2.5 2.5 0 0 0 5 15.5 2.5 2.5 0 0 0 7.5 18a2.5 2.5 0 0 0 2.5-2.5A2.5 2.5 0 0 0 7.5 13m9 0a2.5 2.5 0 0 0-2.5 2.5 2.5 2.5 0 0 0 2.5 2.5 2.5 2.5 0 0 0 2.5-2.5 2.5 2.5 0 0 0-2.5-2.5" />
+            </svg>
+          </div>
+        ) : isAnon ? (
           <div className="w-10 h-10 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-slate-400">
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
@@ -67,11 +77,19 @@ export function ContributionCard({ contribution }: Props) {
           <div className="flex items-center gap-1.5">
             <span
               className={`text-sm font-semibold ${
-                isAnon ? "text-slate-400" : "text-violet-300"
+                isAI ? "text-violet-300 font-bold" : isAnon ? "text-slate-400" : "text-violet-200"
               }`}
             >
               {contribution.authorName}
             </span>
+            {isAI && (
+              <span className="flex items-center gap-1 text-[10px] bg-violet-500/20 text-violet-300 border border-violet-500/30 rounded px-1.5 py-0.2 font-medium">
+                <svg className="w-2.5 h-2.5 text-violet-400" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2L9.5 8.5L3 11l6.5 2.5L12 20l2.5-6.5L21 11l-6.5-2.5L12 2z" />
+                </svg>
+                AI Participant
+              </span>
+            )}
             {timeAgo && (
               <span className="text-slate-500 text-xs">• {timeAgo}</span>
             )}
@@ -90,13 +108,21 @@ export function ContributionCard({ contribution }: Props) {
         <p className="text-slate-200 text-sm leading-relaxed">{contribution.text}</p>
 
         {/* Attachments */}
-        {contribution.attachments && contribution.attachments.length > 0 && (
+        {!hideAttachments && contribution.attachments && contribution.attachments.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {contribution.attachments.map((att, i) => (
-              <div
+              <a
                 key={i}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0d1117] border border-white/10 text-slate-300 text-xs"
+                href={att.url || undefined}
+                target={att.url ? "_blank" : undefined}
+                rel={att.url ? "noopener noreferrer" : undefined}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0d1117] border border-white/10 text-slate-300 text-xs ${att.url ? "cursor-pointer hover:border-violet-400/50 hover:text-white" : ""}`}
+                aria-label={att.url ? `Open uploaded file ${att.label}` : att.label}
               >
+                {att.type === "image" && att.url ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img src={att.url} alt={att.label} className="w-10 h-10 rounded object-cover shrink-0" />
+                ) : null}
                 {att.type === "link" && (
                   <div className="w-4 h-4 rounded-full bg-violet-500 flex items-center justify-center shrink-0">
                     <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 24 24">
@@ -105,7 +131,7 @@ export function ContributionCard({ contribution }: Props) {
                   </div>
                 )}
                 {att.label}
-              </div>
+              </a>
             ))}
           </div>
         )}

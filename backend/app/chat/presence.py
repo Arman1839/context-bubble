@@ -47,7 +47,7 @@ class EphemeralPresenceManager:
         active = []
         if bubble_id in self._presence:
             for uid, (presence, last_seen) in list(self._presence[bubble_id].items()):
-                if now - last_seen <= self.heartbeat_timeout:
+                if presence.status != "offline" and now - last_seen <= self.heartbeat_timeout:
                     active.append(presence)
                 else:
                     self._presence[bubble_id].pop(uid, None)

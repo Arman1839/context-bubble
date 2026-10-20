@@ -2,10 +2,11 @@
 
 export type Role = "participant" | "host";
 
-export type RetentionPolicy = "temporary" | "temporary-plus-record" | "permanent";
+export type RetentionPolicy = "temporary" | "temporary-plus-record" | "permanent" | "view-only";
 
 export type PopState =
   | "ACTIVE"
+  | "EXPIRY_PENDING"
   | "POPPING"
   | "EXPORTING"
   | "SHREDDING"
@@ -200,6 +201,8 @@ export interface Bubble {
   title: string;
   isLive: boolean;
   expiresAt: Date;
+  expiryDecisionDeadline?: Date;
+  viewUntil?: Date;
   memberCount: number;
   members: BubbleMember[];
   retentionPolicy: RetentionPolicy;

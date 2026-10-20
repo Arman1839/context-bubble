@@ -24,7 +24,7 @@ async def pop_bubble(
     host=Depends(require_bubble_host),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """Host action to pop the bubble, generate executive briefing, export, and crypto-shred."""
+    """Host confirms end options and starts the finalization pipeline."""
     db = get_async_firestore_client()
     state_machine = PopStateMachine(db)
     final_state = await state_machine.initiate_pop(
@@ -54,6 +54,10 @@ async def get_pop_status(
         "bubble_id": bubble_id,
         "pop_state": bdata.get("pop_state", "ACTIVE"),
         "popped_at": bdata.get("popped_at"),
+        "pop_reason": bdata.get("pop_reason"),
+        "retention_policy": bdata.get("retention_policy", "temporary"),
+        "expiry_decision_deadline": bdata.get("expiry_decision_deadline"),
+        "view_until": bdata.get("view_until"),
         "exports": exports,
     }
 
@@ -65,6 +69,15 @@ async def get_briefing(
 ):
     """Returns the real executive briefing generated during pop."""
     db = get_async_firestore_client()
+    history_snap = await (
+        db.collection("user_bubble_history").document(user.uid)
+        .collection("bubbles").document(bubble_id).get()
+    )
+    history = history_snap.to_dict() or {}
+    if not history_snap.exists or not (
+        history.get("decision_record_shared") or history.get("host_id") == user.uid
+    ):
+        raise HTTPException(status_code=403, detail="This decision record was not shared with your account.")
     snap = await db.collection("bubbles").document(bubble_id).collection("briefing").document("latest").get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Briefing not found for this bubble.")
@@ -89,18 +102,13 @@ async def execute_cloud_task_pop(
     x_server_internal_secret: Optional[str] = Header(None, alias="X-Server-Internal-Secret"),
 ):
     """Internal webhook called by Google Cloud Tasks when the timer hits zero."""
-    if x_server_internal_secret != settings.SERVER_INTERNAL_SECRET and settings.ENVIRONMENT != "development":
+    if x_server_internal_secret != settings.SERVER_INTERNAL_SECRET and settings.ENVIRONMENT not in ("development", "test"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid internal task secret.")
 
     db = get_async_firestore_client()
     state_machine = PopStateMachine(db)
-    final_state = await state_machine.initiate_pop(
-        bubble_id=payload.bubble_id,
-        actor_id="system-cloud-task",
-        req=PopBubbleRequest(force_shred_on_export_failure=False),
-        is_timer_expiry=True,
-    )
-    return {"status": "task_executed", "bubble_id": payload.bubble_id, "pop_state": final_state}
+    state = await state_machine.begin_expiry_grace(payload.bubble_id)
+    return {"status": "expiry_grace_started", "bubble_id": payload.bubble_id, "pop_state": state}
 
 
 @router.post("/tasks/sweeper")
@@ -108,19 +116,12 @@ async def execute_sweeper(
     x_server_internal_secret: Optional[str] = Header(None, alias="X-Server-Internal-Secret"),
 ):
     """Internal webhook called by Google Cloud Scheduler to check for missed expired bubbles."""
-    if x_server_internal_secret != settings.SERVER_INTERNAL_SECRET and settings.ENVIRONMENT != "development":
+    if x_server_internal_secret != settings.SERVER_INTERNAL_SECRET and settings.ENVIRONMENT not in ("development", "test"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid internal secret.")
 
     db = get_async_firestore_client()
     scheduler = PopScheduler(db)
     state_machine = PopStateMachine(db)
 
-    async def _sweeper_pop_cb(bubble_id: str, is_timer_expired: bool = True):
-        await state_machine.initiate_pop(
-            bubble_id=bubble_id,
-            actor_id="system-sweeper",
-            is_timer_expiry=True,
-        )
-
-    await scheduler.run_sweeper_backstop(_sweeper_pop_cb)
+    await scheduler.run_sweeper_backstop()
     return {"status": "sweeper_completed"}

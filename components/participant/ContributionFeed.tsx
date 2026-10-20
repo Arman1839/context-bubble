@@ -11,6 +11,8 @@ interface Props {
   userName?: string;
   contributions: Contribution[];
   isAnonymous: boolean;
+  isLive?: boolean;
+  hideAttachments?: boolean;
   onToggleAnonymous?: () => void;
   newCount?: number;
   typingUsers?: string[];
@@ -23,6 +25,8 @@ export function ContributionFeed({
   userName,
   contributions,
   isAnonymous,
+  isLive = true,
+  hideAttachments = false,
   onToggleAnonymous,
   newCount = 0,
   typingUsers = [],
@@ -56,7 +60,7 @@ export function ContributionFeed({
           <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          <h2 className="text-white font-semibold text-sm">Live Deliberation Feed</h2>
+          <h2 className="text-white font-semibold text-sm">{isLive ? "Live Deliberation Feed" : "Bubble Chat"}</h2>
           <span className="text-xs text-slate-500">({contributions.length})</span>
         </div>
         <div className="flex items-center gap-2">
@@ -85,7 +89,7 @@ export function ContributionFeed({
           </div>
         ) : (
           contributions.map((c) => (
-            <ContributionCard key={c.id} contribution={c} />
+            <ContributionCard key={c.id} contribution={c} hideAttachments={hideAttachments} />
           ))
         )}
 
@@ -104,14 +108,20 @@ export function ContributionFeed({
 
       {/* Input bar — fixed at bottom */}
       <div className="shrink-0 mt-3">
-        <InputBar
-          bubbleId={bubbleId}
-          userId={userId}
-          userName={userName}
-          isAnonymous={isAnonymous}
-          onToggleAnonymous={onToggleAnonymous}
-          onSubmit={onNewContribution}
-        />
+        {isLive ? (
+          <InputBar
+            bubbleId={bubbleId}
+            userId={userId}
+            userName={userName}
+            isAnonymous={isAnonymous}
+            onToggleAnonymous={onToggleAnonymous}
+            onSubmit={onNewContribution}
+          />
+        ) : (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-950/20 px-4 py-3 text-center text-xs text-amber-200/80">
+            This session has ended. Contributions are closed.
+          </div>
+        )}
       </div>
     </div>
   );

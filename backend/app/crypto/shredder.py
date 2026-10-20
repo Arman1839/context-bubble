@@ -20,13 +20,14 @@ SUBCOLLECTIONS_TO_SHRED = [
     "graph",
     "intelligence",
     "participants",
+    "briefing",
 ]
 
-# For "temporary-plus-record": shred session data but KEEP intelligence, exports, and briefing
+# For "temporary-plus-record": shred session data but keep export and briefing records.
 SUBCOLLECTIONS_KEEP_FOR_RECORD = {
-    "intelligence",
     "exports",
     "export_configs",
+    "briefing",
 }
 
 # Subcollections to shred in "temporary-plus-record" mode
@@ -44,6 +45,8 @@ class CryptoShredder:
         bubble_id: str,
         host_id: str,
         retention_policy: str = "temporary",
+        view_until: datetime | None = None,
+        share_decision_record: bool = False,
     ) -> ShredReceipt:
         logger.info(f"Initiating crypto-shredding for bubble {bubble_id} (retention={retention_policy})")
         bubble_ref = self.db.collection("bubbles").document(bubble_id)
@@ -57,6 +60,11 @@ class CryptoShredder:
             # Keep intelligence + exports, shred session data
             subcols_to_shred = SUBCOLLECTIONS_SHRED_KEEP_RECORD
             logger.info(f"Bubble {bubble_id}: temporary-plus-record — shredding session data, keeping intelligence + exports.")
+        elif retention_policy == "view-only":
+            subcols_to_shred = ["contributions", "chunks", "files"]
+            if not share_decision_record:
+                subcols_to_shred.append("briefing")
+            logger.info(f"Bubble {bubble_id}: retaining chat and intelligence in read-only mode until {view_until}.")
         else:
             # "temporary": full shred
             subcols_to_shred = SUBCOLLECTIONS_TO_SHRED
@@ -74,6 +82,16 @@ class CryptoShredder:
                     deleted_docs_count += 1
                 await batch.commit()
                 docs = await subcol_ref.limit(500).get()
+
+        # Stored chat messages may contain signed document URLs. Remove those
+        # references while keeping the text conversation available in view mode.
+        if retention_policy == "view-only":
+            messages_ref = bubble_ref.collection("messages")
+            messages = await messages_ref.limit(500).get()
+            for message in messages:
+                message_data = message.to_dict() or {}
+                if message_data.get("attachments") or message_data.get("files"):
+                    await message.reference.update({"attachments": [], "files": []})
 
         # 2. Hard-delete all GCS Storage objects under bubbles/{bubble_id}/
         deleted_storage_count = 0
@@ -125,7 +143,17 @@ class CryptoShredder:
 
         # 5. Update bubble root doc to POPPED state and purge title/metadata appropriately
         now = datetime.now(timezone.utc)
-        if retention_policy == "temporary-plus-record":
+        if retention_policy == "view-only":
+            await bubble_ref.update({
+                "pop_state": "POPPED",
+                "is_live": False,
+                "popped_at": now,
+                "shredded_at": now,
+                "retention_policy": retention_policy,
+                "view_until": view_until,
+                "decision_record_shared": share_decision_record,
+            })
+        elif retention_policy == "temporary-plus-record":
             # Keep title for record reference
             await bubble_ref.update({
                 "pop_state": "POPPED",

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import type { Bubble, AITriggerMode, ExportTarget, PopState } from "@/types";
 import { formatExpiry } from "@/lib/sample-data";
 import { extendBubble, updateTriggerMode, configureExportTarget, popBubble } from "@/lib/api";
@@ -22,6 +23,7 @@ export function ManageBubblePanel({
   onBubbleUpdated,
   onBubblePopped,
 }: Props) {
+  const router = useRouter();
   const [expiryLabel, setExpiryLabel] = useState<string>(() => formatExpiry(bubble.expiresAt));
   const [copied, setCopied] = useState(false);
 
@@ -131,6 +133,20 @@ export function ManageBubblePanel({
         force_shred_on_export_failure: false,
         custom_briefing_prompt: customBriefingPrompt.trim() || undefined,
       });
+
+      if (res.pop_state === "FAILED_EXPORT") {
+        setPopStatusText("Export failed. Session data was preserved. Review the export configuration and retry.");
+        setIsPopping(false);
+        return;
+      }
+
+      if (res.pop_state === "ACTIVE") {
+        setPopStatusText("Dry run completed. The bubble is still active and its session data was not shredded.");
+        setIsPopping(false);
+        setShowPopModal(false);
+        onBubblePopped?.("ACTIVE");
+        return;
+      }
 
       setPopStatusText(`State: ${res.pop_state}. Completing exports & shredding...`);
       setTimeout(() => {
@@ -318,14 +334,14 @@ export function ManageBubblePanel({
               Danger Zone
             </h3>
             <button
-              onClick={() => setShowPopModal(true)}
+              onClick={() => router.push(`/bubble/${bubble.id}/end?reason=host`)}
               className="w-full flex flex-col items-center justify-center gap-1 px-4 py-3 rounded-xl border border-rose-500/40 bg-rose-950/20 text-rose-300 hover:bg-rose-900/30 transition-colors"
             >
               <span className="font-semibold text-sm flex items-center gap-1.5">
-                <span>💥</span> Pop &amp; Shred Bubble Now
+                <span>💥</span> End Bubble
               </span>
               <span className="text-[11px] text-rose-400/80">
-                Generates executive briefing, exports records, and shreds session.
+                Choose what attendees can view after the bubble ends.
               </span>
             </button>
           </section>

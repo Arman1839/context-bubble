@@ -16,6 +16,7 @@ async function BubbleContent({ params, searchParams }: PageProps) {
   const roleParam = sp.role === "host" ? ("host" as Role) : ("participant" as Role);
   const titleParam = typeof sp.title === "string" && sp.title.trim() ? sp.title.trim() : undefined;
   const userParam = typeof sp.user === "string" && sp.user.trim() ? sp.user.trim() : undefined;
+  const viewOnly = sp.mode === "view";
 
   const isDemo = id === "demo";
   const bubbleData: Bubble = isDemo
@@ -54,6 +55,7 @@ async function BubbleContent({ params, searchParams }: PageProps) {
       initialBubble={bubbleData}
       initialRole={roleParam}
       initialUserName={userParam}
+      readOnly={viewOnly}
     />
   );
 }
