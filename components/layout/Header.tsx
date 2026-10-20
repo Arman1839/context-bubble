@@ -13,6 +13,8 @@ interface Props {
   currentUser?: AppUser | null;
   onOpenAuthModal?: () => void;
   onSignOut?: () => void;
+  hideTimer?: boolean;
+  readOnly?: boolean;
 }
 
 export function Header({
@@ -22,6 +24,8 @@ export function Header({
   currentUser,
   onOpenAuthModal,
   onSignOut,
+  hideTimer = false,
+  readOnly = false,
 }: Props) {
   const [mounted, setMounted] = useState(false);
   const [expiryLabel, setExpiryLabel] = useState<string>("");
@@ -69,8 +73,10 @@ export function Header({
         )}
       </div>
 
+      {readOnly && <span className="shrink-0 rounded-full border border-violet-500/30 bg-violet-950/30 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-violet-200">Read only</span>}
+
       {/* Members */}
-      <div className="flex items-center gap-2 shrink-0">
+      {!readOnly && <div className="flex items-center gap-2 shrink-0">
         <div className="flex -space-x-2">
           {bubble.members.slice(0, 5).map((m) => (
             /* eslint-disable-next-line @next/next/no-img-element */
@@ -88,10 +94,10 @@ export function Header({
           )}
         </div>
         <span className="text-slate-400 text-xs">{bubble.memberCount} active</span>
-      </div>
+      </div>}
 
       {/* Expiry */}
-      {mounted && expiryLabel && (
+      {!hideTimer && mounted && expiryLabel && (
         <div className={`hidden md:flex items-center gap-1.5 text-xs shrink-0 ${
           isExpiringSoon ? "text-amber-400 font-semibold animate-pulse" : "text-slate-400"
         }`}>
@@ -105,6 +111,10 @@ export function Header({
       )}
 
       {/* Role-specific Host controls */}
+      <Link href="/history" className="cursor-pointer px-2.5 py-1.5 rounded-lg border border-white/10 text-slate-300 text-xs hover:bg-white/5 shrink-0">
+        Previous Bubbles
+      </Link>
+
       {role === "host" && (
         <button
           onClick={onOpenManage}

@@ -13,6 +13,10 @@ RATE_LIMIT_KEYWORDS = ("429", "resource_exhausted", "quota", "rate limit", "over
 
 def _is_transient_error(e: Exception) -> bool:
     msg = str(e).lower()
+    # Quota/resource-exhausted responses are project-level limits; retries against
+    # the same provider burn time without restoring quota. Fail over immediately.
+    if any(term in msg for term in ("quota", "resource_exhausted", "429", "daily limit")):
+        return False
     return any(k in msg for k in RATE_LIMIT_KEYWORDS)
 
 

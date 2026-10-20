@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from app.core.firestore_compat import firestore
 
@@ -27,6 +27,49 @@ class PopStateMachine:
         self.export_mgr = ExportManager(db)
         self.shredder = CryptoShredder(db)
 
+    async def begin_expiry_grace(self, bubble_id: str, grace_seconds: int = 15) -> str:
+        """Freeze an expired bubble and give its host a short extension window."""
+        bubble_ref = self.db.collection("bubbles").document(bubble_id)
+        snap = await bubble_ref.get()
+        if not snap.exists:
+            return "NOT_FOUND"
+        data = snap.to_dict() or {}
+        expires_at = data.get("expires_at")
+        if isinstance(expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(expires_at)
+            except ValueError:
+                expires_at = None
+        if isinstance(expires_at, datetime):
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at > datetime.now(timezone.utc):
+                return "ACTIVE"
+
+        if data.get("pop_state", "ACTIVE") != "ACTIVE":
+            return data.get("pop_state", "ACTIVE")
+
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
+        await bubble_ref.update({
+            "pop_state": "EXPIRY_PENDING",
+            "is_live": False,
+            "pop_reason": "timer_expired",
+            "expiry_decision_deadline": deadline,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        await stream_manager.broadcast(
+            bubble_id=bubble_id,
+            event_type="delta",
+            data={
+                "type": "pop_state_change",
+                "status": "EXPIRY_PENDING",
+                "pop_reason": "timer_expired",
+                "expiry_decision_deadline": deadline.isoformat(),
+                "message": "The bubble timer expired. The host has 15 seconds to extend it or continue to the end-of-bubble options.",
+            },
+        )
+        return "EXPIRY_PENDING"
+
     async def initiate_pop(
         self,
         bubble_id: str,
@@ -50,7 +93,23 @@ class PopStateMachine:
             data = snap.to_dict() or {}
             cur_state = data.get("pop_state", "ACTIVE")
 
-            if cur_state != "ACTIVE" and cur_state != "FAILED_EXPORT":
+            # Cloud Tasks can't always be cancelled after a host extends a bubble.
+            # Ignore the old delivery when the persisted expiration moved forward.
+            if is_timer_expiry:
+                expires_at = data.get("expires_at")
+                if isinstance(expires_at, str):
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at)
+                    except ValueError:
+                        expires_at = None
+                if isinstance(expires_at, datetime):
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    if expires_at > datetime.now(timezone.utc):
+                        logger.info(f"Ignoring stale expiry task for bubble {bubble_id}; expiry was extended.")
+                        return data
+
+            if cur_state not in ("ACTIVE", "EXPIRY_PENDING", "FAILED_EXPORT"):
                 logger.info(f"Pop already in progress for {bubble_id}: state={cur_state}")
                 return data
 
@@ -72,7 +131,16 @@ class PopStateMachine:
             return cur_state
 
         # Read retention policy from bubble data
-        retention_policy = bubble_data.get("retention_policy", "temporary")
+        retention_policy = req.retention_policy or bubble_data.get("retention_policy", "temporary")
+        view_until = None
+        if retention_policy == "view-only":
+            view_until = datetime.now(timezone.utc) + timedelta(days=req.view_retention_days)
+        await bubble_ref.update({
+            "retention_policy": retention_policy,
+            "decision_record_shared": bool(req.share_decision_record),
+            "view_until": view_until,
+        })
+
 
         # Broadcast popping event with reason + retention info to all connected members
         await stream_manager.broadcast(
@@ -149,6 +217,25 @@ class PopStateMachine:
 
         all_successful = all(r.status in ("completed", "dry_run") for r in records)
 
+        if req.dry_run:
+            await bubble_ref.update({
+                "pop_state": "ACTIVE",
+                "is_live": True,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            })
+            await stream_manager.broadcast(
+                bubble_id=bubble_id,
+                event_type="delta",
+                data={
+                    "type": "pop_state_change",
+                    "status": "ACTIVE",
+                    "pop_reason": pop_reason,
+                    "retention_policy": retention_policy,
+                    "message": "Dry run completed. The bubble remains active and its data was not shredded.",
+                },
+            )
+            return "ACTIVE"
+
         # Step 4: Verification before shredding
         if not all_successful and not req.force_shred_on_export_failure:
             logger.error(f"One or more exports failed for bubble {bubble_id}. Transitioning to FAILED_EXPORT.")
@@ -162,6 +249,28 @@ class PopStateMachine:
                 data={"type": "pop_state_change", "status": "FAILED_EXPORT", "pop_reason": pop_reason}
             )
             return "FAILED_EXPORT"
+
+        # Keep a minimal attended-bubble index for every attendee before the
+        # chosen retention policy removes the participant roster.
+        participants = await bubble_ref.collection("participants").get()
+        attendee_ids = {doc.id for doc in participants}
+        host_id = bubble_data.get("host_id")
+        if host_id:
+            attendee_ids.add(host_id)
+        history_ref = self.db.collection("user_bubble_history")
+        history_time = datetime.now(timezone.utc).isoformat()
+        for attendee_id in attendee_ids:
+            await history_ref.document(attendee_id).collection("bubbles").document(bubble_id).set({
+                "bubble_id": bubble_id,
+                "title": bubble_data.get("title", "Ended bubble"),
+                "popped_at": history_time,
+                "pop_reason": pop_reason,
+                "retention_policy": retention_policy,
+                "view_until": view_until.isoformat() if view_until else None,
+                "is_viewable": retention_policy in ("view-only", "permanent"),
+                "decision_record_shared": bool(req.share_decision_record),
+                "host_id": host_id,
+            })
 
         # Step 5: Retention-policy-aware shredding
         if retention_policy == "permanent":
@@ -203,10 +312,14 @@ class PopStateMachine:
             bubble_id=bubble_id,
             host_id=bubble_data.get("host_id", actor_id),
             retention_policy=retention_policy,
+            view_until=view_until,
+            share_decision_record=req.share_decision_record,
         )
 
         # Build appropriate message based on retention policy
-        if retention_policy == "temporary-plus-record":
+        if retention_policy == "view-only":
+            pop_message = "The bubble is read-only. Chat and live intelligence are available for a limited time; uploaded documents were removed."
+        elif retention_policy == "temporary-plus-record":
             pop_message = "Session data has been shredded. Executive briefing and export records are retained."
         else:
             pop_message = "All session data has been permanently crypto-shredded."

@@ -52,31 +52,41 @@ class FileProcessingWorker:
 
         extracted_text = await self._extract_text(filename, content_type, file_bytes)
 
-        if extracted_text:
-            await self.rag.ingest_and_index(
-                bubble_id=bubble_id,
-                source_id=file_id,
-                text=extracted_text,
-                extra_metadata={
-                    "filename": filename,
-                    "content_type": content_type,
-                    "uploaded_by": user_id,
-                }
-            )
+        # Keep an upload record even when OCR/text extraction returns no text.
+        # The original asset must remain discoverable and reopenable either way.
+        file_doc_ref = self.db.collection("bubbles").document(bubble_id).collection("files").document(file_id)
+        await file_doc_ref.set({
+            "file_id": file_id,
+            "bubble_id": bubble_id,
+            "uploaded_by": user_id,
+            "filename": filename,
+            "content_type": content_type,
+            "char_count": len(extracted_text),
+            "cloudinary_url": cloudinary_url,
+            "extraction_status": "extracted" if extracted_text else "no_text_extracted",
+            "created_at": firestore.SERVER_TIMESTAMP,
+        })
 
-            # Record file artifact in Firestore
-            file_doc_ref = self.db.collection("bubbles").document(bubble_id).collection("files").document(file_id)
-            await file_doc_ref.set({
-                "file_id": file_id,
-                "bubble_id": bubble_id,
-                "uploaded_by": user_id,
-                "filename": filename,
-                "content_type": content_type,
-                "char_count": len(extracted_text),
-                "cloudinary_url": cloudinary_url,
-                "created_at": firestore.SERVER_TIMESTAMP,
-            })
-            logger.info(f"Processed and indexed file {filename} ({file_id}) for bubble {bubble_id}")
+        if extracted_text:
+            try:
+                await self.rag.ingest_and_index(
+                    bubble_id=bubble_id,
+                    source_id=file_id,
+                    text=extracted_text,
+                    extra_metadata={
+                        "filename": filename,
+                        "content_type": content_type,
+                        "uploaded_by": user_id,
+                    }
+                )
+                await file_doc_ref.update({"extraction_status": "indexed"})
+            except Exception as e:
+                # Storage and viewing must continue to work when an embedding/quota
+                # failure prevents indexing the extracted document text.
+                logger.warning(f"Could not index uploaded file {filename} ({file_id}): {e}")
+                await file_doc_ref.update({"extraction_status": "extracted_not_indexed"})
+
+        logger.info(f"Recorded uploaded file {filename} ({file_id}) for bubble {bubble_id}; extracted {len(extracted_text)} chars")
 
         return extracted_text
 
@@ -204,7 +214,7 @@ class FileProcessingWorker:
 
     async def _extract_image_ocr(self, file_bytes: bytes, content_type: str, filename: str) -> str:
         client = getattr(self.llm, "_client", None)
-        model_name = getattr(self.llm, "_model_name", "gemini-3.8-flash")
+        model_name = getattr(self.llm, "_model_name", "gemini-3.5-flash")
         if client and hasattr(client, "aio") and file_bytes:
             try:
                 from google.genai import types
@@ -268,7 +278,7 @@ class FileProcessingWorker:
 
         # Fallback: Gemini multimodal
         client = getattr(self.llm, "_client", None)
-        model_name = getattr(self.llm, "_model_name", "gemini-3.8-flash")
+        model_name = getattr(self.llm, "_model_name", "gemini-3.5-flash")
         if client and hasattr(client, "aio"):
             try:
                 from google.genai import types

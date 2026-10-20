@@ -63,6 +63,7 @@ export default function LandingPage() {
             >
               Join Bubble
             </Link>
+            {user && <Link href="/history" className="text-xs font-medium text-slate-200 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 hover:bg-[#1a2236] transition-colors">Previous Bubbles</Link>}
             <Link
               href="/bubble/create"
               className="text-xs font-semibold text-white px-3.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 shadow-md shadow-violet-900/30 transition-colors"
@@ -114,7 +115,7 @@ export default function LandingPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
             </svg>
-            Create a Bubble as Host
+            Create a Bubble
           </Link>
           <Link
             href="/join"

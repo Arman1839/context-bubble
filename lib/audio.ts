@@ -28,6 +28,8 @@ export class LiveAudioSession {
   private handlers: AudioStreamHandlers;
   private isRecording = false;
   private finalReceived = false;
+  private speechRecognition: any = null;
+  private clientTranscript: string = "";
 
   constructor(
     bubbleId: string,
@@ -43,9 +45,49 @@ export class LiveAudioSession {
 
   async start(): Promise<void> {
     if (this.isRecording) return;
+    this.clientTranscript = "";
+    this.finalReceived = false;
+
+    // 1. Initialize browser-native Web Speech API for instant (<1s) local speech recognition
+    const SpeechRecognitionClass =
+      typeof window !== "undefined"
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        : null;
+
+    if (SpeechRecognitionClass) {
+      try {
+        const recognition = new SpeechRecognitionClass();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = "en-US";
+
+        recognition.onresult = (event: any) => {
+          let fullText = "";
+          for (let i = 0; i < event.results.length; i++) {
+            const res = event.results[i];
+            if (res && res[0]) {
+              fullText += (i > 0 ? " " : "") + res[0].transcript;
+            }
+          }
+          this.clientTranscript = fullText.trim();
+          if (this.clientTranscript) {
+            this.handlers.onPartial?.(this.clientTranscript);
+          }
+        };
+
+        recognition.onerror = (e: any) => {
+          console.debug("Web Speech API notice:", e?.error || e);
+        };
+
+        recognition.start();
+        this.speechRecognition = recognition;
+      } catch (speechErr) {
+        console.debug("SpeechRecognition initialization notice:", speechErr);
+      }
+    }
 
     try {
-      // Get microphone access
+      // 2. Get microphone access for MediaRecorder audio buffer
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -54,7 +96,7 @@ export class LiveAudioSession {
         },
       });
 
-      // Build WebSocket URL
+      // 3. Build WebSocket URL to backend
       const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = BACKEND_URL.replace(/^https?:\/\//, "");
       const wsUrl = `${wsProtocol}//${host}/api/v1/bubbles/${this.bubbleId}/audio?user_id=${encodeURIComponent(
@@ -64,36 +106,31 @@ export class LiveAudioSession {
       this.ws = new WebSocket(wsUrl);
       this.ws.binaryType = "arraybuffer";
 
-      // Handle messages from backend (partial + final transcripts)
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === "partial" && data.text) {
+          if (data.type === "partial" && data.text && !this.clientTranscript) {
             this.handlers.onPartial?.(data.text);
           } else if (data.type === "final") {
-            this.finalReceived = true;
-            this.handlers.onFinal?.(data.text || "");
-            // Close the WebSocket after receiving the final transcript
-            this.cleanup();
+            if (!this.finalReceived) {
+              this.finalReceived = true;
+              const finalText = data.text || this.clientTranscript || "";
+              this.handlers.onFinal?.(finalText);
+              this.cleanup();
+            }
           }
         } catch {
           // Ignored
         }
       };
 
-      this.ws.onerror = (e) => {
-        this.handlers.onError?.(new Error("Audio WebSocket connection error"));
+      this.ws.onerror = () => {
+        if (!this.clientTranscript) {
+          this.handlers.onError?.(new Error("Audio WebSocket connection error"));
+        }
       };
 
-      // Wait for WebSocket to open before starting recording
-      await new Promise<void>((resolve, reject) => {
-        if (!this.ws) return reject(new Error("No WebSocket"));
-        this.ws.onopen = () => resolve();
-        this.ws.onclose = () => resolve(); // graceful — proceed even if already closed
-        setTimeout(() => resolve(), 2000); // timeout fallback
-      });
-
-      // Start MediaRecorder
+      // Start MediaRecorder in parallel for backup/multimodal streaming
       this.mediaRecorder = new MediaRecorder(this.stream, {
         mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
           ? "audio/webm;codecs=opus"
@@ -107,7 +144,7 @@ export class LiveAudioSession {
         }
       };
 
-      this.mediaRecorder.start(500); // Emit chunks every 500ms
+      this.mediaRecorder.start(400); // Send chunks every 400ms
       this.isRecording = true;
     } catch (err: unknown) {
       this.cleanup();
@@ -119,12 +156,34 @@ export class LiveAudioSession {
     if (!this.isRecording) return;
     this.isRecording = false;
 
-    // Stop MediaRecorder (this triggers a final ondataavailable with the last chunk)
-    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
-      this.mediaRecorder.stop();
+    // 1. Stop SpeechRecognition
+    if (this.speechRecognition) {
+      try {
+        this.speechRecognition.stop();
+      } catch {
+        // Ignored
+      }
     }
 
-    // Tell the backend to transcribe the full buffer
+    // 2. Stop MediaRecorder
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      try {
+        this.mediaRecorder.stop();
+      } catch {
+        // Ignored
+      }
+    }
+
+    // 3. Fast path: If client speech recognition already captured words, return in <0.3s!
+    const captured = this.clientTranscript.trim();
+    if (captured.length > 0) {
+      this.finalReceived = true;
+      this.handlers.onFinal?.(captured);
+      this.cleanup();
+      return;
+    }
+
+    // 4. Fallback path: Tell backend to transcribe via fast Gemini multimodal (1-2s)
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send("END_SPEECH");
@@ -133,29 +192,38 @@ export class LiveAudioSession {
       }
     }
 
-    // Show "Transcribing..." while waiting for the backend's final response
     this.handlers.onPartial?.("Transcribing...");
 
-    // Safety timeout — if the backend doesn't respond within 90s, close and show empty result
+    // Safety fallback timeout in case WebSocket or network drops
     setTimeout(() => {
       if (!this.finalReceived) {
-        this.handlers.onFinal?.("");
+        this.finalReceived = true;
+        this.handlers.onFinal?.(this.clientTranscript.trim());
         this.cleanup();
       }
-    }, 90000);
+    }, 4000);
   }
 
   private cleanup(): void {
-    if (this.mediaRecorder) {
+    this.isRecording = false;
+
+    if (this.speechRecognition) {
       try {
-        if (this.mediaRecorder.state !== "inactive") {
-          this.mediaRecorder.stop();
-        }
+        this.speechRecognition.stop();
       } catch {
         // Ignored
       }
-      this.mediaRecorder = null;
+      this.speechRecognition = null;
     }
+
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      try {
+        this.mediaRecorder.stop();
+      } catch {
+        // Ignored
+      }
+    }
+    this.mediaRecorder = null;
 
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
@@ -164,14 +232,11 @@ export class LiveAudioSession {
 
     if (this.ws) {
       try {
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-          this.ws.close();
-        }
+        this.ws.close();
       } catch {
         // Ignored
       }
       this.ws = null;
     }
-    this.isRecording = false;
   }
 }

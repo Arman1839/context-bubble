@@ -111,6 +111,8 @@ Generate a strict, structured Executive Briefing conforming to the requested sch
             blockers=[],
             action_items=[],
         )
+        briefing.bubble_id = bubble_id
+        briefing.bubble_title = bubble_title
 
         # Render Markdown content using Jinja template
         rendered_md = self.template.render(

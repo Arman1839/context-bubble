@@ -59,3 +59,6 @@ class PopBubbleRequest(BaseModel):
     force_shred_on_export_failure: bool = False
     dry_run: bool = False
     custom_briefing_prompt: Optional[str] = None
+    retention_policy: Optional[Literal["temporary", "temporary-plus-record", "permanent", "view-only"]] = None
+    share_decision_record: bool = False
+    view_retention_days: int = Field(default=3, ge=1, le=14)

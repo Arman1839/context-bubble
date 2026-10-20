@@ -56,7 +56,7 @@ class WorkingAdapter(LLMAdapter):
 @pytest.mark.anyio
 async def test_resilient_retry_success():
     # Fails 2 times then recovers on 3rd attempt
-    primary = FailingAdapter(fail_count=2)
+    primary = FailingAdapter(fail_count=2, error_msg="503 UNAVAILABLE")
     resilient = ResilientLLMAdapter(primary=primary, fallback=None, max_retries=3, initial_backoff=0.01)
     res = await resilient.generate("test prompt")
     assert res.content == "Recovered after retries"
@@ -73,3 +73,4 @@ async def test_circuit_breaker_failover_to_backup():
     res = await resilient.generate("test prompt")
     assert res.content == "Hello from backup adapter"
     assert "failover" in resilient.model_name
+    assert primary.call_count == 1

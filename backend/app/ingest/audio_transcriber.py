@@ -316,14 +316,33 @@ class AudioTranscriptionSession:
             audio_data = buf.getvalue()
             mime_type = "audio/wav"
 
-        # AssemblyAI batch
+        # 1. Fast Gemini multimodal audio transcription (takes ~1-2s)
+        client = getattr(self.llm, "_client", None)
+        if not client and hasattr(self.llm, "primary"):
+            client = getattr(self.llm.primary, "_client", None)
+        model = getattr(self.llm, "_model_name", None) or getattr(getattr(self.llm, "primary", None), "_model_name", "gemini-flash-lite-latest")
+        if client and hasattr(client, "aio"):
+            try:
+                from google.genai import types  # pyrefly: ignore[missing-import]
+                part = types.Part.from_bytes(data=audio_data, mime_type=mime_type)
+                resp = await client.aio.models.generate_content(
+                    model=model,
+                    contents=[part, "Transcribe the spoken audio accurately. Output ONLY the transcribed speech. Do not add any extra explanations, notes, or timestamps."],
+                )
+                txt = (resp.text or "").strip()
+                if txt and txt.upper() != "SILENCE":
+                    return txt
+            except Exception as e:
+                logger.warning(f"Fast Gemini audio transcription failed, trying AssemblyAI: {e}")
+
+        # 2. Secondary fallback: AssemblyAI batch (with rapid 0.5s polling)
         if settings.ASSEMBLYAI_API_KEY:
             try:
                 import httpx
                 api_key = settings.ASSEMBLYAI_API_KEY
                 headers = {"authorization": api_key}
                 base = "https://api.assemblyai.com/v2"
-                async with httpx.AsyncClient(timeout=60) as c:
+                async with httpx.AsyncClient(timeout=30) as c:
                     r = await c.post(f"{base}/upload", headers=headers, content=audio_data)
                     r.raise_for_status()
                     upload_url = r.json()["upload_url"]
@@ -334,8 +353,8 @@ class AudioTranscriptionSession:
                     r.raise_for_status()
                     tid = r.json()["id"]
 
-                    for _ in range(30):
-                        await asyncio.sleep(2)
+                    for _ in range(20):
+                        await asyncio.sleep(0.5)
                         r = await c.get(f"{base}/transcript/{tid}", headers=headers)
                         r.raise_for_status()
                         d = r.json()
@@ -345,20 +364,5 @@ class AudioTranscriptionSession:
                             break
             except Exception as e:
                 logger.warning(f"AssemblyAI batch fallback failed: {e}")
-
-        # Gemini multimodal
-        client = getattr(self.llm, "_client", None)
-        model = getattr(self.llm, "_model_name", "gemini-3.8-flash")
-        if client and hasattr(client, "aio"):
-            try:
-                from google.genai import types  # pyrefly: ignore[missing-import]
-                part = types.Part.from_bytes(data=audio_data, mime_type=mime_type)
-                resp = await client.aio.models.generate_content(
-                    model=model,
-                    contents=[part, "Transcribe the spoken audio. Output ONLY the transcription text."],
-                )
-                return (resp.text or "").strip()
-            except Exception as e:
-                logger.debug(f"Gemini audio fallback: {e}")
 
         return ""

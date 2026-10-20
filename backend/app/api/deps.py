@@ -1,3 +1,6 @@
+import base64
+import json
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from fastapi import Header, HTTPException, Depends, status
 try:
@@ -78,11 +81,36 @@ async def get_current_user(
     except Exception as e:
         logger.warning(f"Firebase token verification failed: {e}")
         if settings.ENVIRONMENT in ("development", "test"):
+            # Local Firebase Auth can issue valid ID tokens while the backend has
+            # no Admin credentials configured to verify them. In local-only mode,
+            # preserve the token's identity so host checks use the same UID as the
+            # client. Production always requires Admin verification.
+            claims = _decode_unverified_jwt_claims(token)
+            if claims and claims.get("sub"):
+                return AuthenticatedUser(
+                    uid=str(claims["sub"]),
+                    name=str(claims.get("name") or claims.get("email") or "Participant"),
+                    email=claims.get("email"),
+                    is_anonymous=claims.get("firebase", {}).get("sign_in_provider") == "anonymous",
+                )
             return AuthenticatedUser(uid="dev-fallback-user", name="Fallback User")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired authentication credentials."
         )
+
+
+def _decode_unverified_jwt_claims(token: str) -> Dict[str, Any] | None:
+    """Decode JWT claims without verification for local development fallback only."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return claims if isinstance(claims, dict) else None
+    except (ValueError, UnicodeError, json.JSONDecodeError):
+        return None
 
 
 async def get_bubble_participant(
@@ -91,6 +119,22 @@ async def get_bubble_participant(
 ) -> Dict[str, Any]:
     """Ensures caller is an active participant in the bubble."""
     db = get_async_firestore_client()
+    bubble_snap = await db.collection("bubbles").document(bubble_id).get()
+    if not bubble_snap.exists:
+        raise BubbleNotFoundException(bubble_id)
+    bubble_data = bubble_snap.to_dict() or {}
+    if bubble_data.get("pop_state") == "POPPED" and bubble_data.get("retention_policy") == "view-only":
+        view_until = bubble_data.get("view_until")
+        if isinstance(view_until, str):
+            try:
+                view_until = datetime.fromisoformat(view_until)
+            except ValueError:
+                view_until = None
+        if view_until and view_until.tzinfo is None:
+            view_until = view_until.replace(tzinfo=timezone.utc)
+        if view_until and view_until <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This read-only bubble's retention window has ended.")
+
     member_snap = (
         await db.collection("bubbles")
         .document(bubble_id)
@@ -99,17 +143,12 @@ async def get_bubble_participant(
         .get()
     )
     if not member_snap.exists:
-        # Check if bubble exists
-        b_snap = await db.collection("bubbles").document(bubble_id).get()
-        if not b_snap.exists:
-            raise BubbleNotFoundException(bubble_id)
         # Allow host if creator
-        b_data = b_snap.to_dict() or {}
-        if b_data.get("host_id") == user.uid:
+        if bubble_data.get("host_id") == user.uid:
             return {"id": user.uid, "name": user.name, "role": "host"}
 
         # In development mode, auto-register the authenticated participant if bubble is ACTIVE
-        if settings.ENVIRONMENT in ("development", "test") and b_data.get("pop_state", "ACTIVE") == "ACTIVE":
+        if settings.ENVIRONMENT in ("development", "test") and bubble_data.get("pop_state", "ACTIVE") == "ACTIVE":
             from app.chat.service import ChatService
             chat_svc = ChatService(db)
             try:
@@ -124,7 +163,14 @@ async def get_bubble_participant(
 
         # In development mode, allow host match for simulated tokens
         if settings.ENVIRONMENT in ("development", "test"):
-            if b_data.get("host_id") in (user.uid, "participant", "dev-participant", "dev-user-1", "host"):
+            if bubble_data.get("host_id") in (
+                user.uid,
+                "participant",
+                "dev-participant",
+                "dev-user-1",
+                "dev-fallback-user",  # Legacy bubbles created before local Firebase UID fallback was fixed.
+                "host",
+            ):
                 return {"id": user.uid, "name": user.name, "role": "host"}
 
         raise HTTPException(
@@ -152,7 +198,14 @@ async def require_bubble_host(
 
     # 2. In development mode fallback for local simulated credentials
     if settings.ENVIRONMENT in ("development", "test"):
-        if b_data.get("host_id") in (user.uid, "participant", "dev-participant", "dev-user-1", "host"):
+        if b_data.get("host_id") in (
+            user.uid,
+            "participant",
+            "dev-participant",
+            "dev-user-1",
+            "dev-fallback-user",  # Legacy bubbles created before local Firebase UID fallback was fixed.
+            "host",
+        ):
             return {"id": user.uid, "name": user.name, "role": "host"}
 
     member = await get_bubble_participant(bubble_id, user)
