@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     REDIS_URL: str | None = None
 
     # Bubble Constraints & Debouncing
+    FIREBASE_SERVICE_ACCOUNT_JSON: str = Field(default="", description="Raw JSON string or base64 of service account key")
     BUBBLE_MAX_PARTICIPANTS: int = 10
     BUBBLE_DEFAULT_TOKEN_BUDGET: int = 250000
     DEBOUNCE_TRAILING_SECONDS: float = 3.0
@@ -61,6 +62,26 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Support inline service account JSON if GOOGLE_APPLICATION_CREDENTIALS is not set or missing
+if settings.FIREBASE_SERVICE_ACCOUNT_JSON and not (settings.GOOGLE_APPLICATION_CREDENTIALS and os.path.exists(settings.GOOGLE_APPLICATION_CREDENTIALS)):
+    try:
+        import tempfile
+        import base64
+        content = settings.FIREBASE_SERVICE_ACCOUNT_JSON.strip()
+        if not content.startswith("{") and (content.startswith("ey") or len(content) > 100):
+            try:
+                content = base64.b64decode(content).decode("utf-8")
+            except Exception:
+                pass
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w", encoding="utf-8")
+        tmp.write(content)
+        tmp.flush()
+        tmp.close()
+        settings.GOOGLE_APPLICATION_CREDENTIALS = tmp.name
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+    except Exception as e:
+        pass
 
 # Propagate service account path to os.environ so Firebase SDK / google-auth picks it up
 if settings.GOOGLE_APPLICATION_CREDENTIALS and os.path.exists(settings.GOOGLE_APPLICATION_CREDENTIALS):
