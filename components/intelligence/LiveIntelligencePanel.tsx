@@ -1,31 +1,73 @@
 "use client";
 
-import React, { useState } from "react";
-import type { Intelligence, KnowledgeGraph, Insight } from "@/types";
+import React, { useMemo, useState } from "react";
+import type { Contribution, Intelligence, KnowledgeGraph, Insight, NodeType, ReactFlowNode } from "@/types";
 import { KnowledgeGraphVisualizer } from "./KnowledgeGraphVisualizer";
+
+function keepOverviewSentences(value: string): string {
+  const sentenceEnds: number[] = [];
+  for (const match of value.matchAll(/[.!?](?=\s+[A-Z0-9])/g)) {
+    const index = match.index ?? -1;
+    if (index < 0) continue;
+    const preceding = value.slice(Math.max(0, index - 4), index + 1);
+    if (/\b(?:Mr|Mrs|Ms|Dr)\.$/i.test(preceding)) continue;
+    sentenceEnds.push(index);
+  }
+  return sentenceEnds.length > 0 ? value.slice(0, sentenceEnds[0] + 1).trim() : value;
+}
+
+function cleanLiveSummary(value: string): string {
+  const text = value.trim();
+  const words = [...text.matchAll(/[\p{L}\p{N}]+/gu)];
+  if (text.length <= 500 || words.length < 40) return keepOverviewSentences(text);
+
+  let repeatedStart = Number.POSITIVE_INFINITY;
+  for (let size = 10; size >= 5; size -= 1) {
+    const occurrences = new Map<string, number[]>();
+    for (let index = 0; index <= words.length - size; index += 1) {
+      const phrase = words.slice(index, index + size).map((word) => word[0].toLowerCase()).join(" ");
+      const positions = occurrences.get(phrase) || [];
+      positions.push(index);
+      occurrences.set(phrase, positions);
+    }
+    for (const positions of occurrences.values()) {
+      if (positions.length >= 3) repeatedStart = Math.min(repeatedStart, positions[1]);
+    }
+  }
+
+  const maxLength = 800;
+  const maxWordIndex = words.findIndex((word) => (word.index ?? 0) >= maxLength);
+  const cutWordIndex = Math.min(repeatedStart, maxWordIndex < 0 ? words.length : maxWordIndex);
+  if (!Number.isFinite(cutWordIndex) || cutWordIndex >= words.length) return keepOverviewSentences(text);
+
+  const cutAt = words[cutWordIndex]?.index ?? maxLength;
+  const prefix = text.slice(0, cutAt).trim();
+  const sentenceEnd = Math.max(prefix.lastIndexOf("."), prefix.lastIndexOf("!"), prefix.lastIndexOf("?"));
+  if (sentenceEnd >= Math.min(120, prefix.length * 0.55)) return keepOverviewSentences(prefix.slice(0, sentenceEnd + 1).trim());
+  return keepOverviewSentences(`${prefix.replace(/[\s,;:]+$/, "")}…`);
+}
 
 interface Props {
   intelligence: Intelligence;
   knowledgeGraph?: KnowledgeGraph | null;
+  contributions?: Contribution[];
+  bubbleTitle?: string;
   streamingToken?: string;
   isSynthesizing?: boolean;
-  aiResponse?: string;
-  isAIResponding?: boolean;
-  aiError?: string;
   onRefreshGraph?: () => void;
 }
 
 export function LiveIntelligencePanel({
   intelligence,
   knowledgeGraph,
+  contributions = [],
+  bubbleTitle = "Discussion",
   streamingToken,
   isSynthesizing = false,
-  aiResponse = "",
-  isAIResponding = false,
-  aiError = "",
   onRefreshGraph,
 }: Props) {
   const [activeTab, setActiveTab] = useState<"synthesis" | "graph">("synthesis");
+  const [showFullSummary, setShowFullSummary] = useState(false);
   const [viewingEvidence, setViewingEvidence] = useState<{
     label: string;
     sideA: { count: number; label: string };
@@ -33,9 +75,217 @@ export function LiveIntelligencePanel({
   } | null>(null);
 
   const rawInsights = intelligence.raw_insights || [];
-  const summaryText = intelligence.summary?.trim() || "";
+  const summaryText = cleanLiveSummary(intelligence.summary || "");
   const disagreementsList = intelligence.disagreements || [];
   const missingPiecesList = intelligence.missingPieces || [];
+  const structuredNextSteps = (intelligence.nextSteps || []).filter((step) => typeof step === "string" && step.trim());
+  const nextSteps = structuredNextSteps.length
+    ? structuredNextSteps
+    : rawInsights.filter((insight) => insight.type === "action_item" && insight.text.trim()).map((insight) => insight.text.trim()).slice(0, 4);
+
+  const displayGraph = useMemo(() => {
+    // If backend provided a knowledgeGraph without old claim nodes, prefer it
+    if (knowledgeGraph && knowledgeGraph.nodes.length > 0) {
+      const hasOldClaims = knowledgeGraph.nodes.some((node) => node.data.node_type === "claim");
+      if (!hasOldClaims) {
+        return knowledgeGraph;
+      }
+    }
+
+    const topicId = "local-topic";
+    const topicLabel = intelligence.summary?.trim() || bubbleTitle;
+
+    // Categorize semantic items
+    const debates: Array<{ id: string; label: string; conf: number; contribIds: string[] }> = [];
+    const consensusDecisions: Array<{ id: string; label: string; type: NodeType; conf: number; contribIds: string[] }> = [];
+    const blockers: Array<{ id: string; label: string; conf: number; contribIds: string[] }> = [];
+    const actionItems: Array<{ id: string; label: string; conf: number; contribIds: string[] }> = [];
+
+    // 1. From raw_insights
+    for (const [idx, ins] of rawInsights.entries()) {
+      if (!ins.text?.trim()) continue;
+      const text = ins.text.trim();
+      const id = ins.insight_id || `ins-${idx}`;
+      if (ins.type === "debate") {
+        debates.push({ id, label: text, conf: ins.confidence, contribIds: ins.supporting_contribution_ids || [] });
+      } else if (ins.type === "blocker") {
+        blockers.push({ id, label: text, conf: ins.confidence, contribIds: ins.supporting_contribution_ids || [] });
+      } else if (ins.type === "action_item") {
+        actionItems.push({ id, label: text, conf: ins.confidence, contribIds: ins.supporting_contribution_ids || [] });
+      } else if (ins.type === "consensus" || ins.type === "decision") {
+        consensusDecisions.push({ id, label: text, type: ins.type, conf: ins.confidence, contribIds: ins.supporting_contribution_ids || [] });
+      }
+    }
+
+    // 2. From disagreements
+    const seenDebates = new Set(debates.map((d) => d.label.toLowerCase()));
+    for (const [idx, d] of disagreementsList.entries()) {
+      const label = [d.sideA?.label, d.sideB?.label].filter(Boolean).join(" vs ");
+      if (label && !seenDebates.has(label.toLowerCase())) {
+        seenDebates.add(label.toLowerCase());
+        debates.push({ id: d.id || `dispute-${idx}`, label, conf: 0.85, contribIds: [] });
+      }
+    }
+
+    // 3. From missing pieces
+    const seenBlockers = new Set(blockers.map((b) => b.label.toLowerCase()));
+    for (const [idx, mp] of missingPiecesList.entries()) {
+      const desc = mp.description?.trim();
+      if (desc && !seenBlockers.has(desc.toLowerCase())) {
+        seenBlockers.add(desc.toLowerCase());
+        blockers.push({ id: mp.id || `mp-${idx}`, label: desc, conf: 0.8, contribIds: [] });
+      }
+    }
+
+    // 4. From next steps
+    const seenActions = new Set(actionItems.map((a) => a.label.toLowerCase()));
+    for (const [idx, step] of nextSteps.entries()) {
+      const text = step.trim();
+      if (text && !seenActions.has(text.toLowerCase())) {
+        seenActions.add(text.toLowerCase());
+        actionItems.push({ id: `step-${idx}`, label: text, conf: 0.85, contribIds: [] });
+      }
+    }
+
+    const hasAnySemanticItems = debates.length > 0 || consensusDecisions.length > 0 || blockers.length > 0 || actionItems.length > 0;
+    if (!hasAnySemanticItems) {
+      return { bubble_id: knowledgeGraph?.bubble_id || "local", nodes: [], edges: [], version: knowledgeGraph?.version || 0 };
+    }
+
+    const topicNode: ReactFlowNode = {
+      id: topicId,
+      type: "topicNode",
+      data: { label: topicLabel, node_type: "topic", status: "consensus", stance: { agree_count: 1, disagree_count: 0, neutral_count: 0 }, supporting_contribution_ids: [], confidence: 1 },
+      position: { x: 360, y: 40 },
+    };
+
+    const nodes: ReactFlowNode[] = [topicNode];
+    const edges: Array<{ id: string; source: string; target: string; type: "supports" | "disputes" | "depends_on" | "resolves" }> = [];
+
+    const debateIds: string[] = [];
+    const blockerIds: string[] = [];
+
+    // Add Debates
+    debates.slice(0, 4).forEach((item, i) => {
+      debateIds.push(item.id);
+      nodes.push({
+        id: item.id,
+        type: "customBubbleNode",
+        data: {
+          label: item.label,
+          node_type: "debate",
+          status: "contested",
+          stance: { agree_count: 1, disagree_count: 2, neutral_count: 0 },
+          supporting_contribution_ids: item.contribIds,
+          confidence: item.conf,
+        },
+        position: { x: 60, y: 180 + i * 150 },
+      });
+      edges.push({
+        id: `edge-${topicId}-${item.id}`,
+        source: topicId,
+        target: item.id,
+        type: "disputes",
+      });
+    });
+
+    // Add Consensus & Decisions
+    consensusDecisions.slice(0, 4).forEach((item, i) => {
+      nodes.push({
+        id: item.id,
+        type: "customBubbleNode",
+        data: {
+          label: item.label,
+          node_type: item.type,
+          status: "consensus",
+          stance: { agree_count: Math.max(2, item.contribIds.length), disagree_count: 0, neutral_count: 0 },
+          supporting_contribution_ids: item.contribIds,
+          confidence: item.conf,
+        },
+        position: { x: 640, y: 180 + i * 150 },
+      });
+      edges.push({
+        id: `edge-${topicId}-${item.id}`,
+        source: topicId,
+        target: item.id,
+        type: "supports",
+      });
+    });
+
+    // Add Blockers
+    const blockerBaseY = 180 + Math.max(debateIds.length, 1) * 150;
+    blockers.slice(0, 3).forEach((item, i) => {
+      blockerIds.push(item.id);
+      nodes.push({
+        id: item.id,
+        type: "customBubbleNode",
+        data: {
+          label: item.label,
+          node_type: "blocker",
+          status: "unresolved",
+          stance: { agree_count: 1, disagree_count: 1, neutral_count: 0 },
+          supporting_contribution_ids: item.contribIds,
+          confidence: item.conf,
+        },
+        position: { x: 80, y: blockerBaseY + i * 140 },
+      });
+      const srcId = debateIds.length ? debateIds[i % debateIds.length] : topicId;
+      edges.push({
+        id: `edge-${srcId}-${item.id}`,
+        source: srcId,
+        target: item.id,
+        type: "depends_on",
+      });
+    });
+
+    // Add Action Items
+    const actionBaseY = Math.max(
+      blockerBaseY + blockerIds.length * 140,
+      180 + Math.max(consensusDecisions.length, 1) * 150
+    );
+    actionItems.slice(0, 3).forEach((item, i) => {
+      nodes.push({
+        id: item.id,
+        type: "customBubbleNode",
+        data: {
+          label: item.label,
+          node_type: "action_item",
+          status: "consensus",
+          stance: { agree_count: 2, disagree_count: 0, neutral_count: 0 },
+          supporting_contribution_ids: item.contribIds,
+          confidence: item.conf,
+        },
+        position: { x: 360 + (i % 2) * 220, y: actionBaseY + Math.floor(i / 2) * 140 },
+      });
+
+      if (blockerIds.length > 0) {
+        const targetBlocker = blockerIds[i % blockerIds.length];
+        edges.push({
+          id: `edge-${item.id}-${targetBlocker}`,
+          source: item.id,
+          target: targetBlocker,
+          type: "resolves",
+        });
+      } else if (debateIds.length > 0) {
+        const targetDebate = debateIds[i % debateIds.length];
+        edges.push({
+          id: `edge-${item.id}-${targetDebate}`,
+          source: item.id,
+          target: targetDebate,
+          type: "resolves",
+        });
+      } else {
+        edges.push({
+          id: `edge-${topicId}-${item.id}`,
+          source: topicId,
+          target: item.id,
+          type: "supports",
+        });
+      }
+    });
+
+    return { bubble_id: knowledgeGraph?.bubble_id || "local", nodes, edges, version: knowledgeGraph?.version || 0 };
+  }, [bubbleTitle, disagreementsList, intelligence.summary, knowledgeGraph, missingPiecesList, nextSteps, rawInsights]);
   const hasContent = Boolean(
     summaryText || disagreementsList.length || missingPiecesList.length || intelligence.nextSteps?.length || rawInsights.length
   );
@@ -111,21 +361,6 @@ export function LiveIntelligencePanel({
       {activeTab === "synthesis" ? (
         <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4 flex flex-col gap-5 pt-3">
 
-          {(aiResponse || isAIResponding || aiError) && (
-            <section aria-live="polite">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="w-4 h-4 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-bold flex items-center justify-center">AI</span>
-                <h3 className="text-white font-bold text-xs tracking-wide">Bubble AI</h3>
-                {isAIResponding && <span className="text-[10px] text-violet-300">Responding…</span>}
-              </div>
-              <div className={`rounded-2xl px-4 py-3.5 ${aiError ? "bg-amber-950/30 border border-amber-500/30" : "bg-[#141226] border border-violet-500/20"}`}>
-                <p className={`text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap ${aiError ? "text-amber-200" : "text-slate-200"}`}>
-                  {aiError || aiResponse || "Thinking…"}
-                </p>
-              </div>
-            </section>
-          )}
-
           {/* ── ⚡ Live Summary ──────────────────────────────── */}
           <section>
             <div className="flex items-center gap-2 mb-2">
@@ -143,9 +378,27 @@ export function LiveIntelligencePanel({
                 </svg>
                 <span>Auto-updating</span>
               </div>
-              <p className="text-slate-200 text-xs sm:text-[13px] leading-relaxed pr-24">
+              <p
+                className="text-slate-200 text-xs sm:text-[13px] leading-relaxed pr-24 break-words"
+                style={showFullSummary ? undefined : {
+                  display: "-webkit-box",
+                  WebkitBoxOrient: "vertical",
+                  WebkitLineClamp: 5,
+                  overflow: "hidden",
+                }}
+              >
                 {summaryText || "Waiting for contributions before generating a live summary."}
               </p>
+              {summaryText.length > 320 && (
+                <button
+                  type="button"
+                  aria-expanded={showFullSummary}
+                  onClick={() => setShowFullSummary((expanded) => !expanded)}
+                  className="mt-2 text-[11px] font-semibold text-violet-300 hover:text-violet-200"
+                >
+                  {showFullSummary ? "Show less" : "Show more"}
+                </button>
+              )}
             </div>
           </section>
 
@@ -222,16 +475,15 @@ export function LiveIntelligencePanel({
           </section>
 
           {/* ── 🚀 Next Steps ───────────────────────────────── */}
-          {intelligence.nextSteps && intelligence.nextSteps.length > 0 && (
-            <section className="pt-5">
+          <section className="pt-5">
               <div className="flex items-center gap-1.5 mb-2.5">
                 <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                 </svg>
                 <span className="text-[11px] font-bold text-slate-200 tracking-wide uppercase">Next Steps</span>
               </div>
-              <div className="flex flex-col gap-1.5">
-                {intelligence.nextSteps.map((step, i) => (
+              {nextSteps.length > 0 ? <div className="flex flex-col gap-1.5">
+                {nextSteps.map((step, i) => (
                   <div
                     key={i}
                     className="rounded-xl bg-[#111827] border border-white/[0.06] px-4 py-3 flex items-start gap-2.5"
@@ -242,9 +494,8 @@ export function LiveIntelligencePanel({
                     <p className="text-slate-300 text-xs leading-relaxed">{step}</p>
                   </div>
                 ))}
-              </div>
+              </div> : <p className="text-slate-500 text-xs">No concrete next steps identified yet. They’ll appear here when supported by the discussion.</p>}
             </section>
-          )}
 
           {/* ── Semantic Insights (collapsed by default) ────── */}
           {rawInsights.length > 0 && (
@@ -266,7 +517,7 @@ export function LiveIntelligencePanel({
         /* ── Tab: Knowledge Graph ─────────────────────────── */
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden px-1">
           <KnowledgeGraphVisualizer
-            graph={knowledgeGraph || null}
+            graph={displayGraph}
             isLoading={isSynthesizing}
             onRefresh={onRefreshGraph}
           />

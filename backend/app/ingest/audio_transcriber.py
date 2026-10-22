@@ -320,7 +320,7 @@ class AudioTranscriptionSession:
         client = getattr(self.llm, "_client", None)
         if not client and hasattr(self.llm, "primary"):
             client = getattr(self.llm.primary, "_client", None)
-        model = getattr(self.llm, "_model_name", None) or getattr(getattr(self.llm, "primary", None), "_model_name", "gemini-flash-lite-latest")
+        model = getattr(self.llm, "_model_name", None) or getattr(getattr(self.llm, "primary", None), "_model_name", "gemini-3.5-flash-lite")
         if client and hasattr(client, "aio"):
             try:
                 from google.genai import types  # pyrefly: ignore[missing-import]

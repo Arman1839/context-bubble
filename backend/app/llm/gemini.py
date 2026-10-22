@@ -22,14 +22,11 @@ T = TypeVar("T", bound=BaseModel)
 
 # Default candidate models in order of priority for resilient failover
 _CANDIDATE_GENERATION_MODELS = [
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
     "gemini-3.8-flash",
-    "gemini-3.6-flash",
-    "gemini-3-flash-preview",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
+    "gemini-3.1-flash-lite-preview",
 ]
 
 _CANDIDATE_EMBEDDING_MODELS = [
@@ -192,14 +189,18 @@ class GeminiAdapter(LLMAdapter):
         schema_dict = None
         if response_schema:
             config_dict["response_mime_type"] = "application/json"
-            if hasattr(response_schema, "model_json_schema"):
-                schema_dict = _clean_schema_for_gemini(response_schema.model_json_schema())
-                config_dict["response_schema"] = schema_dict
-            elif isinstance(response_schema, dict):
-                schema_dict = _clean_schema_for_gemini(response_schema)
-                config_dict["response_schema"] = schema_dict
-            else:
-                config_dict["response_schema"] = response_schema
+            # flash-lite models have a tokenizer/grammar bug with deep nested response_schema, causing token repetition loops.
+            # For flash-lite models, response_mime_type='application/json' with Pydantic model validation is optimal and avoids the bug.
+            is_flash_lite = "flash-lite" in (self._model_name or "").lower()
+            if not is_flash_lite:
+                if hasattr(response_schema, "model_json_schema"):
+                    schema_dict = _clean_schema_for_gemini(response_schema.model_json_schema())
+                    config_dict["response_schema"] = schema_dict
+                elif isinstance(response_schema, dict):
+                    schema_dict = _clean_schema_for_gemini(response_schema)
+                    config_dict["response_schema"] = schema_dict
+                else:
+                    config_dict["response_schema"] = response_schema
 
         assert types is not None
         config = types.GenerateContentConfig(**config_dict)

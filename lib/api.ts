@@ -43,6 +43,8 @@ export interface CreateBubblePayload {
   duration_minutes?: number;
   retention_policy?: RetentionPolicy;
   anonymous_mode_enabled?: boolean;
+  host_avatar_url?: string;
+  host_avatar_animal?: string;
   trigger_mode?: AITriggerMode;
   token_budget?: number;
   e2ee_enabled?: boolean;
@@ -50,6 +52,7 @@ export interface CreateBubblePayload {
 
 export interface BubbleResponseRaw {
   id: string;
+  join_code?: string;
   title: string;
   is_live: boolean;
   expires_at: string;
@@ -77,6 +80,43 @@ export interface BubbleResponseRaw {
 export interface JoinBubblePayload {
   display_name: string;
   avatar_url?: string;
+  avatar_animal?: string;
+  join_code?: string;
+}
+
+export interface UpdateHostIdentityPayload {
+  display_name: string;
+  avatar_url?: string;
+  avatar_animal?: string;
+}
+
+export async function updateBubbleHostIdentity(
+  bubbleId: string,
+  payload: UpdateHostIdentityPayload
+): Promise<void> {
+  const headers = await getAuthHeaders();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/v1/bubbles/${bubbleId}/host/identity`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error("Updating your meeting identity timed out. Check that the server is running, then try again.");
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Could not update meeting identity (${res.status})`);
+  }
 }
 
 // ─── API Client Methods ───────────────────────────────────────────────────────
@@ -94,6 +134,8 @@ export async function createBubble(payload: CreateBubblePayload): Promise<Bubble
       duration_minutes: payload.duration_minutes || 120,
       retention_policy: payload.retention_policy || "temporary",
       anonymous_mode_enabled: Boolean(payload.anonymous_mode_enabled),
+      host_avatar_url: payload.host_avatar_url,
+      host_avatar_animal: payload.host_avatar_animal,
       trigger_mode: payload.trigger_mode || "mention",
       token_budget: payload.token_budget || 250000,
       e2ee_enabled: Boolean(payload.e2ee_enabled),
@@ -140,6 +182,8 @@ export async function joinBubble(
     body: JSON.stringify({
       display_name: payload.display_name,
       avatar_url: payload.avatar_url,
+      avatar_animal: payload.avatar_animal,
+      join_code: payload.join_code,
     }),
   });
 
@@ -148,6 +192,45 @@ export async function joinBubble(
     throw new Error(errData.detail || errData.error?.message || `Failed to join bubble (${res.status})`);
   }
 
+  return res.json();
+}
+
+export async function updateAnonymousAvailability(
+  bubbleId: string,
+  enabled: boolean,
+): Promise<{ status: string; anonymous_mode_enabled: boolean }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/${bubbleId}/anonymous-mode`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Could not update anonymous mode (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function leaveBubble(bubbleId: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/${bubbleId}/leave`, { method: "POST", headers });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Could not leave bubble (${res.status})`);
+  }
+}
+
+export async function removeBubbleParticipant(bubbleId: string, participantId: string): Promise<{ join_code: string }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/${bubbleId}/participants/${encodeURIComponent(participantId)}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Could not remove participant (${res.status})`);
+  }
   return res.json();
 }
 
@@ -224,6 +307,28 @@ export async function popBubble(
   return res.json();
 }
 
+export async function startBubblePop(
+  bubbleId: string,
+  req: {
+    retention_policy: RetentionPolicy;
+    share_decision_record: boolean;
+    view_retention_days?: number;
+  },
+): Promise<{ status: string; pop_state: PopState }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/${bubbleId}/pop/start`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(req),
+    keepalive: true,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to start ending bubble (${res.status})`);
+  }
+  return res.json();
+}
+
 export interface BubbleHistoryEntry {
   bubble_id: string;
   title: string;
@@ -240,6 +345,24 @@ export async function getBubbleHistory(): Promise<BubbleHistoryEntry[]> {
   const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/history`, { headers });
   if (!res.ok) throw new Error("Could not load previous bubbles.");
   return res.json();
+}
+
+export async function deleteBubbleHistoryEntry(bubbleId: string): Promise<void> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/history/${encodeURIComponent(bubbleId)}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) throw new Error("Could not remove this bubble from My Bubbles.");
+}
+
+export async function deleteAllBubbleHistory(): Promise<void> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch(`${BACKEND_URL}/api/v1/bubbles/history`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) throw new Error("Could not clear My Bubbles.");
 }
 
 /**
@@ -388,7 +511,7 @@ export async function getActivePresence(bubbleId: string): Promise<ActivePresenc
 export async function uploadAndProcessFile(
   bubbleId: string,
   file: File
-): Promise<{ file_id: string; filename: string; char_count: number; secure_url: string; upload_url: string }> {
+): Promise<{ file_id: string; filename: string; char_count: number; secure_url: string; upload_url: string; preview_text: string }> {
   const token = await getCurrentIdToken().catch(() => null);
   const headers: Record<string, string> = {};
   if (token) {
@@ -418,6 +541,7 @@ export async function uploadAndProcessFile(
     char_count: data.char_count || 0,
     secure_url: data.secure_url || "",
     upload_url: data.secure_url || "",
+    preview_text: data.preview_text || "",
   };
 }
 
@@ -436,6 +560,9 @@ export interface SSECallbacks {
   onPopState?: (state: PopState, receiptId?: string, popReason?: string, retentionPolicy?: string, message?: string, expiryDecisionDeadline?: string) => void;
   onMessage?: (message: any) => void;
   onMemberJoined?: (member: any) => void;
+  onMemberLeft?: (payload: { user_id: string; display_name: string }) => void;
+  onMemberRemoved?: (payload: { user_id: string; removed_by_host?: boolean }) => void;
+  onAnonymousModeUpdated?: (payload: { enabled: boolean }) => void;
   onError?: (error: Event) => void;
 }
 
@@ -484,6 +611,31 @@ export function subscribeToBubbleStream(
     } catch {
       // Ignored
     }
+  });
+
+  eventSource.addEventListener("member_removed", (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      callbacks.onMemberRemoved?.({ user_id: data.user_id, removed_by_host: data.removed_by_host });
+    } catch {
+      // Ignore malformed member removal events.
+    }
+  });
+
+  eventSource.addEventListener("member_left", (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      callbacks.onMemberLeft?.({ user_id: data.user_id, display_name: data.display_name || "A participant" });
+    } catch {
+      // Ignore malformed member leave events.
+    }
+  });
+
+  eventSource.addEventListener("anonymous_mode_updated", (e) => {
+    try {
+      const data = JSON.parse((e as MessageEvent).data);
+      callbacks.onAnonymousModeUpdated?.({ enabled: Boolean(data.enabled) });
+    } catch { /* Ignore malformed SSE event. */ }
   });
 
   eventSource.addEventListener("token", (e) => {

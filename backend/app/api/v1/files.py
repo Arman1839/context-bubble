@@ -152,6 +152,7 @@ async def upload_file(
         "filename": filename,
         "content_type": content_type,
         "char_count": len(extracted_text),
+        "preview_text": extracted_text[:20000],
         "secure_url": upload_result.get("secure_url"),
         "public_id": upload_result.get("public_id"),
         "provider": upload_result.get("provider"),

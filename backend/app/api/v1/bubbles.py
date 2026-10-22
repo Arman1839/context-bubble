@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from app.core.firestore_compat import firestore
 
 from app.api.deps import (
@@ -21,9 +22,21 @@ from app.models.bubble import (
 )
 from app.services.firebase import get_async_firestore_client
 from app.chat.service import ChatService
+from app.chat.presence import presence_manager
+from app.intelligence.stream_manager import stream_manager
 from app.pop.scheduler import PopScheduler
 
 router = APIRouter()
+
+
+class AnonymousModeRequest(BaseModel):
+    enabled: bool
+
+
+class UpdateHostIdentityRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=50)
+    avatar_url: str | None = None
+    avatar_animal: str | None = None
 
 
 @router.post("", response_model=BubbleResponse, status_code=status.HTTP_201_CREATED)
@@ -33,6 +46,7 @@ async def create_bubble(
 ):
     db = get_async_firestore_client()
     bubble_id = str(uuid.uuid4())[:8]
+    join_code = uuid.uuid4().hex[:8]
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=req.duration_minutes)
 
@@ -40,12 +54,14 @@ async def create_bubble(
     host_member = BubbleMember(
         id=user.uid,
         name=user.name,
-        avatar=f"https://api.dicebear.com/9.x/notionists/svg?seed={user.uid}",
+        avatar=req.host_avatar_url or f"https://api.dicebear.com/9.x/notionists/svg?seed={user.uid}",
+        avatar_animal=req.host_avatar_animal,
         role="host",
     )
 
     bubble_data = {
         "id": bubble_id,
+        "join_code": join_code,
         "title": req.title,
         "is_live": True,
         "expires_at": expires_at,
@@ -73,6 +89,7 @@ async def create_bubble(
 
     return BubbleResponse(
         id=bubble_id,
+        join_code=join_code,
         title=req.title,
         is_live=True,
         expires_at=expires_at,
@@ -101,8 +118,39 @@ async def join_bubble(
         user_id=user.uid,
         display_name=req.display_name,
         avatar_url=req.avatar_url,
+        avatar_animal=req.avatar_animal,
+        join_code=req.join_code,
     )
     return member
+
+
+@router.patch("/{bubble_id}/host/identity")
+async def update_host_identity(
+    bubble_id: str,
+    req: UpdateHostIdentityRequest,
+    host=Depends(require_bubble_host),
+):
+    """Update the host's display name and avatar before entering the room."""
+    db = get_async_firestore_client()
+    member_ref = db.collection("bubbles").document(bubble_id).collection("participants").document(host["id"])
+    member_snap = await member_ref.get()
+    member_data = member_snap.to_dict() or {}
+    if not member_snap.exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Host membership was not found.")
+
+    updated_fields = {
+        "name": req.display_name.strip(),
+        "avatar": req.avatar_url if not req.avatar_animal else None,
+        "avatar_animal": req.avatar_animal,
+        "last_seen_at": firestore.SERVER_TIMESTAMP,
+    }
+    await member_ref.update(updated_fields)
+    member_data.update({**updated_fields, "last_seen_at": datetime.now(timezone.utc)})
+    updated_member = BubbleMember(**member_data)
+    member_payload = updated_member.model_dump(mode="json")
+    await presence_manager.update_presence(bubble_id, host["id"], req.display_name.strip())
+    await stream_manager.broadcast(bubble_id, "member_joined", member_payload)
+    return member_payload
 
 
 @router.get("/history")
@@ -127,13 +175,42 @@ async def list_bubble_history(user: AuthenticatedUser = Depends(get_current_user
     return rows
 
 
+@router.delete("/history/{bubble_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_bubble_history_entry(
+    bubble_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Remove one bubble from the current user's personal history."""
+    db = get_async_firestore_client()
+    history_ref = (
+        db.collection("user_bubble_history").document(user.uid)
+        .collection("bubbles").document(bubble_id)
+    )
+    await history_ref.delete()
+
+
+@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_all_bubble_history(user: AuthenticatedUser = Depends(get_current_user)):
+    """Clear the current user's personal bubble history."""
+    db = get_async_firestore_client()
+    entries = await db.collection("user_bubble_history").document(user.uid).collection("bubbles").get()
+    for entry in entries:
+        await entry.reference.delete()
+
+
 @router.get("/{bubble_id}", response_model=BubbleResponse)
 async def get_bubble(
     bubble_id: str,
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     db = get_async_firestore_client()
-    snap = await db.collection("bubbles").document(bubble_id).get()
+    bubbles_ref = db.collection("bubbles")
+    snap = await bubbles_ref.document(bubble_id).get()
+    if not snap.exists:
+        matches = await bubbles_ref.where("join_code", "==", bubble_id).limit(1).get()
+        if matches:
+            snap = matches[0]
+            bubble_id = snap.id
     if not snap.exists:
         raise BubbleNotFoundException(bubble_id)
 
@@ -199,7 +276,114 @@ async def get_bubble(
         intelligence=intelligence,
         expiry_decision_deadline=data.get("expiry_decision_deadline"),
         view_until=data.get("view_until"),
+        join_code=data.get("join_code") or bubble_id,
     )
+
+
+@router.patch("/{bubble_id}/anonymous-mode")
+async def update_anonymous_mode(
+    bubble_id: str,
+    req: AnonymousModeRequest,
+    host=Depends(require_bubble_host),
+):
+    db = get_async_firestore_client()
+    bubble_ref = db.collection("bubbles").document(bubble_id)
+    snap = await bubble_ref.get()
+    if not snap.exists:
+        raise BubbleNotFoundException(bubble_id)
+    await bubble_ref.update({
+        "anonymous_mode_enabled": req.enabled,
+        "updated_at": firestore.SERVER_TIMESTAMP,
+    })
+    await stream_manager.broadcast(bubble_id, "anonymous_mode_updated", {"enabled": req.enabled})
+    return {"status": "updated", "anonymous_mode_enabled": req.enabled}
+
+
+@router.post("/{bubble_id}/leave", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_bubble(
+    bubble_id: str,
+    participant=Depends(get_bubble_participant),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    if participant.get("role") == "host":
+        raise HTTPException(status_code=400, detail="The host cannot leave; end the bubble instead.")
+
+    db = get_async_firestore_client()
+    bubble_ref = db.collection("bubbles").document(bubble_id)
+    member_ref = bubble_ref.collection("participants").document(user.uid)
+    tx = db.transaction()
+
+    @firestore.async_transactional
+    async def _leave(transaction):
+        member = await member_ref.get(transaction=transaction)
+        if member.exists:
+            bubble = await bubble_ref.get(transaction=transaction)
+            bubble_data = bubble.to_dict() or {}
+            transaction.delete(member_ref)
+            transaction.update(bubble_ref, {"member_count": max(0, int(bubble_data.get("member_count", 1)) - 1)})
+            return True
+        return False
+
+    removed = await _leave(tx)
+    if not removed:
+        raise HTTPException(status_code=404, detail="You are no longer a member of this bubble.")
+
+    await presence_manager.update_presence(bubble_id, user.uid, participant.get("name", user.name), status="offline")
+    await stream_manager.broadcast(bubble_id, "member_left", {
+        "user_id": user.uid,
+        "display_name": participant.get("name", user.name),
+    })
+    return None
+
+
+@router.delete("/{bubble_id}/participants/{participant_id}")
+async def remove_bubble_participant(
+    bubble_id: str,
+    participant_id: str,
+    host=Depends(require_bubble_host),
+):
+    db = get_async_firestore_client()
+    bubble_ref = db.collection("bubbles").document(bubble_id)
+    bubble_snap = await bubble_ref.get()
+    if not bubble_snap.exists:
+        raise BubbleNotFoundException(bubble_id)
+    if (bubble_snap.to_dict() or {}).get("host_id") == participant_id:
+        raise HTTPException(status_code=400, detail="The host cannot be removed from the bubble.")
+
+    member_ref = bubble_ref.collection("participants").document(participant_id)
+    member_snap = await member_ref.get()
+    if not member_snap.exists:
+        raise HTTPException(status_code=404, detail="Participant not found.")
+    member_data = member_snap.to_dict() or {}
+    tx = db.transaction()
+    new_join_code = uuid.uuid4().hex[:8]
+
+    @firestore.async_transactional
+    async def _remove(transaction):
+        member = await member_ref.get(transaction=transaction)
+        if not member.exists:
+            return False
+        bubble = await bubble_ref.get(transaction=transaction)
+        current = (bubble.to_dict() or {}).get("member_count", 1)
+        transaction.delete(member_ref)
+        transaction.update(bubble_ref, {
+            "member_count": max(0, int(current) - 1),
+            "join_code": new_join_code,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        transaction.set(bubble_ref.collection("removed_participants").document(participant_id), {
+            "id": participant_id,
+            "name": member_data.get("name", "Participant"),
+            "removed_at": firestore.SERVER_TIMESTAMP,
+        })
+        return True
+
+    removed = await _remove(tx)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Participant not found.")
+    await presence_manager.update_presence(bubble_id, participant_id, member_data.get("name", "Participant"), status="offline")
+    await stream_manager.broadcast(bubble_id, "member_removed", {"user_id": participant_id, "removed_by_host": True})
+    return {"join_code": new_join_code}
 
 
 @router.post("/{bubble_id}/extend")

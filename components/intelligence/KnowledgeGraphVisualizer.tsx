@@ -144,7 +144,7 @@ export function KnowledgeGraphVisualizer({ graph, isLoading = false, onRefresh }
       <div className="flex items-center justify-between px-3 py-2 bg-[#0e1424]/90 border-b border-white/5 z-10">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-          <span className="text-xs font-semibold text-white">Live Semantic Graph</span>
+          <span className="text-xs font-semibold text-white">Knowledge Graph</span>
           <span className="text-[10px] text-slate-500">({nodes.length} nodes, {edges.length} edges)</span>
         </div>
         <div className="flex items-center gap-1.5">

@@ -154,25 +154,57 @@ class PopStateMachine:
             }
         )
 
-        # Step 2: Assemble session transcript for Executive Briefing
+        # Step 2: Assemble session transcript, contributions, intelligence, and graph for Executive Briefing
         msgs_snap = await (
             bubble_ref.collection("messages")
             .order_by("seq", direction=firestore.Query.ASCENDING)
             .get()
         )
+        contribs_snap = await (
+            bubble_ref.collection("contributions")
+            .order_by("timestamp", direction=firestore.Query.ASCENDING)
+            .get()
+        )
         transcript_lines = []
+        seen_texts = set()
         for m in msgs_snap:
             m_data = m.to_dict() or {}
+            text = (m_data.get("text") or "").strip()
+            if not text or text in seen_texts:
+                continue
+            seen_texts.add(text)
             author = "Anonymous" if m_data.get("is_anonymous") else m_data.get("author_name", "User")
-            transcript_lines.append(f"[{author}]: {m_data.get('text', '')}")
+            transcript_lines.append(f"[{author}]: {text}")
+
+        for c in contribs_snap:
+            c_data = c.to_dict() or {}
+            text = (c_data.get("text") or "").strip()
+            if not text or text in seen_texts:
+                continue
+            seen_texts.add(text)
+            author = c_data.get("author_name", "User")
+            transcript_lines.append(f"[{author} (Contribution)]: {text}")
+
         session_text = "\n".join(transcript_lines)
 
-        logger.info(f"Generating Executive Briefing for bubble {bubble_id}")
+        # Retrieve latest live AI intelligence suggestions and knowledge graph
+        intel_snap = await bubble_ref.collection("intelligence").document("latest").get()
+        intelligence_data = intel_snap.to_dict() if intel_snap.exists else None
+
+        graph_snap = await bubble_ref.collection("graph").document("latest").get()
+        graph_data = graph_snap.to_dict() if graph_snap.exists else None
+
+        logger.info(
+            f"Generating Executive Briefing for bubble {bubble_id} "
+            f"(Transcript lines: {len(transcript_lines)}, Intel: {bool(intelligence_data)}, Graph: {bool(graph_data)})"
+        )
         briefing = await self.briefing_gen.generate_briefing(
             bubble_id=bubble_id,
             bubble_title=bubble_data.get("title", "Deliberation Session"),
             session_text=session_text,
             custom_instructions=req.custom_briefing_prompt,
+            intelligence=intelligence_data,
+            knowledge_graph=graph_data,
         )
         pdf_bytes = self.briefing_gen.render_pdf(briefing)
 

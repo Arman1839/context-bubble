@@ -30,6 +30,9 @@ from app.api.v1 import api_v1_router
 
 
 
+from app.core.firestore_compat import InMemoryFirestoreClient
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -37,7 +40,27 @@ async def lifespan(app: FastAPI):
     init_telemetry("context-bubble-backend")
     init_firebase()
     # Eagerly initialize Firestore async client
-    get_async_firestore_client()
+    db = get_async_firestore_client()
+    if settings.ENVIRONMENT in ("development", "test") and not isinstance(db, InMemoryFirestoreClient):
+        try:
+            await asyncio.wait_for(db.collection("bubbles").limit(1).get(), timeout=2.5)
+            logger.info("Cloud Firestore connectivity verified successfully.")
+        except Exception as exc:
+            logger.warning(
+                f"Cloud Firestore probe failed ({exc}). Automatically switching to InMemoryFirestoreClient for development."
+            )
+            from app.services import firebase as fb_svc
+            fb_svc._async_firestore_client = InMemoryFirestoreClient()
+            db = fb_svc._async_firestore_client
+
+    if isinstance(db, InMemoryFirestoreClient) and not db.store:
+        try:
+            from scripts.seed_demo import seed_demo
+            await seed_demo()
+            logger.info("Seeded demo bubble into InMemoryFirestoreClient.")
+        except Exception as seed_err:
+            logger.warning(f"Demo bubble seed notice: {seed_err}")
+
     from app.intelligence.stream_manager import stream_manager
     await stream_manager.initialize_redis()
     from app.pop.scheduler import PopScheduler
@@ -65,13 +88,14 @@ if HAS_OTEL_INSTRUMENTOR and FastAPIInstrumentor:
     FastAPIInstrumentor.instrument_app(app)
 
 
-# CORS Configuration
+# CORS Configuration: allow all origins with credentials support for local development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=r"^https?://.*$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Response-Time-Ms"],
 )
 
 
@@ -92,11 +116,57 @@ async def logging_and_timing_middleware(request: Request, call_next):
             f"Unhandled error on {request.method} {request.url.path} ({duration_ms}ms): {exc}",
             exc_info=True,
         )
-        raise exc
+        origin = request.headers.get("origin") or "*"
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": str(exc),
+                }
+            },
+            headers={
+                "X-Response-Time-Ms": str(duration_ms),
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            },
+        )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        f"Global unhandled error on {request.method} {request.url.path}: {exc}",
+        exc_info=True,
+    )
+    origin = request.headers.get("origin") or "*"
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": str(exc),
+            }
+        },
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 
 @app.exception_handler(BubbleException)
 async def bubble_exception_handler(request: Request, exc: BubbleException):
+    origin = request.headers.get("origin") or "*"
+    headers = dict(exc.headers or {})
+    headers.setdefault("Access-Control-Allow-Origin", origin)
+    headers.setdefault("Access-Control-Allow-Credentials", "true")
+    headers.setdefault("Access-Control-Allow-Methods", "*")
+    headers.setdefault("Access-Control-Allow-Headers", "*")
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -106,7 +176,7 @@ async def bubble_exception_handler(request: Request, exc: BubbleException):
                 "extra": exc.extra,
             }
         },
-        headers=exc.headers,
+        headers=headers,
     )
 
 

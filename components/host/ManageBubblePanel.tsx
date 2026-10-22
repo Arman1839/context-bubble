@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { Bubble, AITriggerMode, ExportTarget, PopState } from "@/types";
 import { formatExpiry } from "@/lib/sample-data";
 import { extendBubble, updateTriggerMode, configureExportTarget, popBubble } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface Props {
   bubble: Bubble;
@@ -13,6 +14,7 @@ interface Props {
   onExtendExpiry?: () => void;
   onBubbleUpdated?: (updated: Partial<Bubble>) => void;
   onBubblePopped?: (finalState: PopState) => void;
+  onRemoveParticipant?: (participantId: string) => Promise<void>;
 }
 
 export function ManageBubblePanel({
@@ -22,6 +24,7 @@ export function ManageBubblePanel({
   onExtendExpiry,
   onBubbleUpdated,
   onBubblePopped,
+  onRemoveParticipant,
 }: Props) {
   const router = useRouter();
   const [expiryLabel, setExpiryLabel] = useState<string>(() => formatExpiry(bubble.expiresAt));
@@ -50,6 +53,23 @@ export function ManageBubblePanel({
   const [popDryRun, setPopDryRun] = useState(false);
   const [customBriefingPrompt, setCustomBriefingPrompt] = useState("");
   const [popStatusText, setPopStatusText] = useState<string | null>(null);
+  const [removingParticipantId, setRemovingParticipantId] = useState<string | null>(null);
+  const [participantError, setParticipantError] = useState<string | null>(null);
+  const [participantToRemove, setParticipantToRemove] = useState<{ id: string; name: string } | null>(null);
+
+  const removeParticipant = async (participantId: string) => {
+    if (!onRemoveParticipant) return;
+    setRemovingParticipantId(participantId);
+    setParticipantError(null);
+    try {
+      await onRemoveParticipant(participantId);
+      setParticipantToRemove(null);
+    } catch (err) {
+      setParticipantError(err instanceof Error ? err.message : "Could not remove participant.");
+    } finally {
+      setRemovingParticipantId(null);
+    }
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -61,8 +81,8 @@ export function ManageBubblePanel({
   const handleCopyInviteLink = () => {
     const inviteUrl =
       typeof window !== "undefined"
-        ? `${window.location.origin}/join?code=${bubble.id}`
-        : `/join?code=${bubble.id}`;
+        ? `${window.location.origin}/join?code=${bubble.joinCode || bubble.id}`
+        : `/join?code=${bubble.joinCode || bubble.id}`;
 
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(inviteUrl).then(() => {
@@ -223,11 +243,33 @@ export function ManageBubblePanel({
             </p>
           </section>
 
-          {/* Anonymous Mode */}
+          {/* Participant management */}
+          <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
+            <h3 className="text-white text-xs font-semibold uppercase tracking-wider">Participants</h3>
+            {participantError && <p className="text-xs text-rose-300">{participantError}</p>}
+            <div className="flex flex-col gap-1.5">
+              {bubble.members.filter((member) => member.id !== bubble.hostId && member.role !== "host" && member.isOnline === true).map((member) => (
+                <div key={member.id} className="flex items-center gap-2 rounded-xl border border-white/5 bg-[#161d2e] px-2.5 py-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {member.avatar_animal ? (
+                    <span className="grid h-7 w-7 place-items-center rounded-full bg-slate-800 text-lg" role="img" aria-label={`${member.name}'s animal avatar`}>{member.avatar_animal}</span>
+                  ) : (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img src={member.avatar || `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(member.id)}`} alt="" className="h-7 w-7 rounded-full bg-slate-800" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-xs text-slate-200">{member.name}</span>
+                  {onRemoveParticipant && <button type="button" disabled={removingParticipantId === member.id} onClick={() => setParticipantToRemove({ id: member.id, name: member.name })} className="rounded-md px-2 py-1 text-[10px] font-medium text-rose-300 hover:bg-rose-950/40 disabled:opacity-50">{removingParticipantId === member.id ? "Removing…" : "Remove"}</button>}
+                </div>
+              ))}
+              {bubble.members.filter((member) => member.id !== bubble.hostId && member.role !== "host" && member.isOnline === true).length === 0 && <p className="text-[11px] text-slate-500">No participants are currently in this Bubble.</p>}
+            </div>
+          </section>
+
+          {/* Anonymous Mode Availability */}
           <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
             <div className="flex items-center justify-between">
               <span className="text-white text-sm font-medium">
-                Anonymous Mode{" "}
+                Allow Anonymous Mode{" "}
                 <span className={`text-xs font-normal ${bubble.anonymousModeEnabled ? "text-violet-400" : "text-slate-400"}`}>
                   ({bubble.anonymousModeEnabled ? "ON" : "OFF"})
                 </span>
@@ -247,7 +289,7 @@ export function ManageBubblePanel({
               </button>
             </div>
             <p className="text-slate-400 text-xs leading-relaxed">
-              When ON, all subsequent messages hide participant names and avatars.
+              When ON, everyone can choose to hide their own name and avatar on individual messages.
             </p>
           </section>
 
@@ -317,8 +359,8 @@ export function ManageBubblePanel({
           {/* Invite Code */}
           <section className="flex flex-col gap-2 pt-2 border-t border-white/5">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-300 font-medium">Invite Code</span>
-              <span className="font-mono text-violet-300 text-xs font-semibold">{bubble.id}</span>
+              <span className="text-xs text-slate-300 font-medium">Join ID</span>
+              <span className="font-mono text-violet-300 text-xs font-semibold">{bubble.joinCode || bubble.id}</span>
             </div>
             <button
               onClick={handleCopyInviteLink}
@@ -326,6 +368,7 @@ export function ManageBubblePanel({
             >
               {copied ? "✓ Copied invite URL!" : "Copy Invite Link"}
             </button>
+            <p className="text-[10px] leading-relaxed text-slate-500">The Join ID changes when you remove a participant. Share the current ID with new participants.</p>
           </section>
 
           {/* Danger Zone: Pop Bubble */}
@@ -426,6 +469,16 @@ export function ManageBubblePanel({
           </div>
         </div>
       )}
+
+      {participantToRemove && <ConfirmDialog
+        title={`Remove ${participantToRemove.name} from this bubble?`}
+        description="They will be removed immediately, won’t be able to rejoin with the old link, and the bubble’s join ID will change."
+        confirmLabel="Remove participant"
+        busy={removingParticipantId === participantToRemove.id}
+        error={participantError}
+        onCancel={() => { setParticipantToRemove(null); setParticipantError(null); }}
+        onConfirm={() => removeParticipant(participantToRemove.id)}
+      />}
     </>
   );
 }

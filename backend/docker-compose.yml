@@ -14,6 +14,7 @@ services:
       - FIREBASE_STORAGE_EMULATOR_HOST=firebase-emulators:9199
       - GOOGLE_CLOUD_PROJECT=context-bubble-dev
       - LLM_PROVIDER=gemini
+      - GEMINI_MODEL=gemini-3.5-flash-lite
       - GEMINI_API_KEY=AIzaSyFakeKeyForLocalDev
     volumes:
       - .:/app

@@ -14,10 +14,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: Literal["development", "staging", "production", "test"] = "development"
     PORT: int = 8000
     HOST: str = "0.0.0.0"
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000"
-    ]
+    CORS_ORIGINS: List[str] = ["*"]
 
     # Google Cloud & Firebase
     GOOGLE_CLOUD_PROJECT: str = "context-bubble-dev"
@@ -26,6 +23,7 @@ class Settings(BaseSettings):
     FIRESTORE_EMULATOR_HOST: str | None = None
     FIREBASE_STORAGE_EMULATOR_HOST: str | None = None
     FIREBASE_AUTH_EMULATOR_HOST: str | None = None
+    USE_IN_MEMORY_FIRESTORE: bool = False
     GCS_BUCKET_NAME: str = "context-bubble-artifacts"
     CLOUD_TASKS_QUEUE_PATH: str = "projects/context-bubble-dev/locations/us-central1/queues/bubble-timers"
     CLOUD_TASKS_HANDLER_URL: str = "http://localhost:8000/api/v1/pop/tasks/execute"
@@ -33,7 +31,8 @@ class Settings(BaseSettings):
     # LLM Settings
     LLM_PROVIDER: Literal["gemini", "anthropic"] = "gemini"
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")
-    GEMINI_MODEL: str = "gemini-flash-lite-latest"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_FALLBACK_MODEL: str = "gemini-3.1-flash-lite"
     GEMINI_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
 
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic Claude API key")

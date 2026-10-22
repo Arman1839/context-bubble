@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getBubble, popBubble } from "@/lib/api";
+import { getBubble, popBubble, startBubblePop } from "@/lib/api";
 import { useFirebaseAuth } from "@/lib/auth";
+import { AmbientBubbles } from "@/components/layout/AmbientBubbles";
 import type { RetentionPolicy } from "@/types";
 
 interface Props { bubbleId: string; }
@@ -16,6 +17,8 @@ export function EndBubblePage({ bubbleId }: Props) {
   const [retention, setRetention] = useState<"ephemeral" | "view-only">("ephemeral");
   const [days, setDays] = useState(3);
   const [shareRecord, setShareRecord] = useState(true);
+  const [creationRetention, setCreationRetention] = useState<RetentionPolicy>("temporary-plus-record");
+  const [showChanges, setShowChanges] = useState(false);
   const [focus, setFocus] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -23,19 +26,34 @@ export function EndBubblePage({ bubbleId }: Props) {
   useEffect(() => {
     let active = true;
     getBubble(bubbleId)
-      .then((bubble) => { if (active) setTitle(bubble.title); })
+      .then((bubble) => {
+        if (!active) return;
+        setTitle(bubble.title);
+        setCreationRetention(bubble.retention_policy);
+        setShareRecord(bubble.retention_policy !== "temporary");
+        setRetention(bubble.retention_policy === "view-only" ? "view-only" : "ephemeral");
+      })
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : "Could not load this bubble."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [bubbleId]);
 
-  const finishBubble = async (forceShred = false) => {
+  const finishBubble = async (forceShred = false, direct = false) => {
     setSubmitting(true);
     setError("");
-    const retentionPolicy: RetentionPolicy = retention === "view-only"
+    const retentionPolicy: RetentionPolicy = direct ? creationRetention : retention === "view-only"
       ? "view-only"
       : shareRecord ? "temporary-plus-record" : "temporary";
     try {
+      if (direct) {
+        await startBubblePop(bubbleId, {
+          retention_policy: retentionPolicy,
+          share_decision_record: retentionPolicy !== "temporary",
+          view_retention_days: 3,
+        });
+        router.replace("/");
+        return;
+      }
       const result = await popBubble(bubbleId, {
         force_shred_on_export_failure: forceShred,
         custom_briefing_prompt: focus.trim() || undefined,
@@ -59,22 +77,32 @@ export function EndBubblePage({ bubbleId }: Props) {
   if (!user) return <main className="min-h-screen grid place-items-center bg-[#0d0f1a] text-slate-200">Sign in as the host to end this bubble.</main>;
 
   return (
-    <main className="min-h-screen bg-[#0d0f1a] text-slate-100 px-4 py-10">
-      <section className="mx-auto max-w-2xl rounded-3xl border border-white/10 bg-[#111827] p-6 shadow-2xl sm:p-8">
+    <main className="relative isolate min-h-screen overflow-hidden bg-[#0d0f1a] text-slate-100 px-4 py-10">
+      <AmbientBubbles />
+      <section className="relative z-10 mx-auto max-w-2xl rounded-3xl border border-white/10 bg-[#111827]/90 p-6 shadow-2xl backdrop-blur-md sm:p-8">
         <div className="mb-7 flex items-start gap-4">
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-rose-500/30 bg-rose-500/10 text-2xl">⏹</div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">End bubble</p>
             <h1 className="mt-1 text-2xl font-bold">{title}</h1>
-            <p className="mt-2 text-sm text-slate-400">Choose what attendees can keep after this session ends.</p>
+            <p className="mt-2 text-sm text-slate-400">End using the retention mode chosen when this bubble was created, or adjust the wrap-up settings first.</p>
           </div>
         </div>
 
+        {error && !showChanges && <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-950/30 p-3 text-sm text-amber-200">{error}</div>}
+
+        {!showChanges && <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button type="button" onClick={() => router.replace(`/bubble/${bubbleId}`)} disabled={submitting} className="cursor-pointer rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 disabled:opacity-50">Back to bubble</button>
+          <button type="button" onClick={() => finishBubble(false, true)} disabled={submitting} className="cursor-pointer rounded-xl bg-rose-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-rose-950/30 disabled:opacity-50">{submitting ? "Ending…" : "End bubble"}</button>
+          <button type="button" onClick={() => setShowChanges(true)} disabled={submitting} className="cursor-pointer rounded-xl border border-violet-400/30 bg-violet-500/10 px-5 py-3 text-sm font-semibold text-violet-200 disabled:opacity-50">End bubble with changes</button>
+        </div>}
+
+        {showChanges && <>
         <label className="mb-6 flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-[#161d2e] p-4">
           <input type="checkbox" checked={shareRecord} onChange={(e) => setShareRecord(e.target.checked)} className="mt-1 accent-violet-500" />
           <span>
             <span className="block text-sm font-semibold">Share the decision record with everyone who attended</span>
-            <span className="mt-1 block text-xs leading-relaxed text-slate-400">Attendees will find the generated summary and decisions in Previous Bubbles.</span>
+            <span className="mt-1 block text-xs leading-relaxed text-slate-400">Attendees will find the generated summary and decisions in My Bubbles.</span>
           </span>
         </label>
 
@@ -107,6 +135,7 @@ export function EndBubblePage({ bubbleId }: Props) {
           <button type="button" onClick={() => router.replace(`/bubble/${bubbleId}`)} disabled={submitting} className="cursor-pointer rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 disabled:opacity-50">Back to bubble</button>
           <button type="button" onClick={() => finishBubble()} disabled={submitting} className="cursor-pointer rounded-xl bg-rose-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-rose-950/30 disabled:opacity-50">{submitting ? "Ending bubble…" : "Confirm and end bubble"}</button>
         </div>
+        </>}
       </section>
     </main>
   );

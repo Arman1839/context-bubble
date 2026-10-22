@@ -31,7 +31,17 @@ async def create_contribution(
     debounce = DebounceManager(db)
 
     contrib_ref = db.collection("bubbles").document(bubble_id).collection("contributions").document(contrib.id)
+    bubble_snap = await db.collection("bubbles").document(bubble_id).get()
+    bubble_data = bubble_snap.to_dict() or {}
+    is_anonymous = bool(contrib.is_anonymous and bubble_data.get("anonymous_mode_enabled", False))
     doc_data = contrib.model_dump(mode="json")
+    doc_data.update({
+        "author_id": f"anonymous-{contrib.id}" if is_anonymous else user.uid,
+        "author_name": "Anonymous" if is_anonymous else participant.get("name", user.name),
+        "author_avatar": None if is_anonymous else participant.get("avatar"),
+        "author_animal": None if is_anonymous else participant.get("avatar_animal"),
+        "is_anonymous": is_anonymous,
+    })
     doc_data["timestamp"] = firestore.SERVER_TIMESTAMP
 
     await contrib_ref.set(doc_data)
@@ -41,12 +51,20 @@ async def create_contribution(
         bubble_id=bubble_id,
         source_id=contrib.id,
         text=contrib.text,
-        extra_metadata={"author_id": user.uid, "author_name": participant.get("name", user.name)}
+        extra_metadata={
+            "author_id": "anonymous" if is_anonymous else user.uid,
+            "author_name": "Anonymous" if is_anonymous else participant.get("name", user.name),
+        }
     )
 
     # Notify debounce for live synthesis
     debounce.notify_event(bubble_id, synthesizer.run_synthesis)
 
+    contrib.author_id = doc_data["author_id"]
+    contrib.author_name = doc_data["author_name"]
+    contrib.author_avatar = doc_data["author_avatar"]
+    contrib.author_animal = doc_data["author_animal"]
+    contrib.is_anonymous = is_anonymous
     return contrib
 
 
@@ -65,4 +83,10 @@ async def list_contributions(
         .limit(limit)
         .get()
     )
-    return [Contribution(**c.to_dict()) for c in snap]
+    rows = []
+    for c in snap:
+        data = c.to_dict() or {}
+        if data.get("is_anonymous"):
+            data.update({"author_id": f"anonymous-{data.get('id', c.id)}", "author_name": "Anonymous", "author_avatar": None, "author_animal": None})
+        rows.append(Contribution(**data))
+    return rows

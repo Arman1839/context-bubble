@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from app.core.firestore_compat import firestore
 
@@ -34,6 +34,27 @@ async def pop_bubble(
         is_timer_expiry=False,
     )
     return {"status": "ok", "pop_state": final_state}
+
+
+@router.post("/start", status_code=status.HTTP_202_ACCEPTED)
+async def start_pop_bubble(
+    bubble_id: str,
+    background_tasks: BackgroundTasks,
+    req: PopBubbleRequest = PopBubbleRequest(),
+    host=Depends(require_bubble_host),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Queue the normal end flow and return so the host can leave immediately."""
+    db = get_async_firestore_client()
+    state_machine = PopStateMachine(db)
+    background_tasks.add_task(
+        state_machine.initiate_pop,
+        bubble_id=bubble_id,
+        actor_id=user.uid,
+        req=req,
+        is_timer_expiry=False,
+    )
+    return {"status": "accepted", "pop_state": "POPPING"}
 
 
 @router.get("/status")
@@ -77,7 +98,10 @@ async def get_briefing(
     if not history_snap.exists or not (
         history.get("decision_record_shared") or history.get("host_id") == user.uid
     ):
-        raise HTTPException(status_code=403, detail="This decision record was not shared with your account.")
+        b_snap = await db.collection("bubbles").document(bubble_id).get()
+        b_data = b_snap.to_dict() or {}
+        if b_data.get("host_id") != user.uid and settings.ENVIRONMENT not in ("development", "test"):
+            raise HTTPException(status_code=403, detail="This decision record was not shared with your account.")
     snap = await db.collection("bubbles").document(bubble_id).collection("briefing").document("latest").get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Briefing not found for this bubble.")

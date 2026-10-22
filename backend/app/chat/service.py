@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+from fastapi import HTTPException, status
 from app.core.firestore_compat import firestore
 
 from app.core.config import settings
@@ -55,7 +56,9 @@ class ChatService:
         user_id: str,
         display_name: str,
         avatar_url: Optional[str] = None,
+        avatar_animal: Optional[str] = None,
         role: str = "participant",
+        join_code: Optional[str] = None,
     ) -> BubbleMember:
         """
         Enforces HARD CAP of 10 participants via a Firestore atomic transaction.
@@ -78,6 +81,19 @@ class ChatService:
             current_count = b_data.get("member_count", 0)
 
             if not existing_member_snap.exists:
+                removed_ref = bubble_ref.collection("removed_participants").document(user_id)
+                removed_snap = await removed_ref.get(transaction=transaction)
+                if removed_snap.exists:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You were removed by the host and cannot rejoin this bubble.",
+                    )
+                expected_code = b_data.get("join_code")
+                if b_data.get("host_id") != user_id and expected_code and join_code != expected_code:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="This invite code is no longer valid. Ask the host for the current join ID.",
+                    )
                 # If joining for the first time, check hard cap
                 if current_count >= settings.BUBBLE_MAX_PARTICIPANTS:
                     raise BubbleFullException(bubble_id, limit=settings.BUBBLE_MAX_PARTICIPANTS)
@@ -87,11 +103,13 @@ class ChatService:
             else:
                 new_count = current_count
 
+            effective_role = "host" if b_data.get("host_id") == user_id else role
             member_data = {
                 "id": user_id,
                 "name": display_name,
                 "avatar": avatar_url or f"https://api.dicebear.com/9.x/notionists/svg?seed={user_id}",
-                "role": role,
+                "avatar_animal": avatar_animal,
+                "role": effective_role,
                 "joined_at": firestore.SERVER_TIMESTAMP,
                 "last_seen_at": firestore.SERVER_TIMESTAMP,
             }
@@ -119,9 +137,12 @@ class ChatService:
         bubble_id: str,
         user_id: str,
         user_name: str,
-        user_avatar: Optional[str],
-        req: PostMessageRequest,
+        user_avatar: Optional[str] = None,
+        user_animal: Optional[str] = None,
+        req: Optional[PostMessageRequest] = None,
     ) -> Message:
+        if req is None:
+            req = PostMessageRequest(text="")
         bubble_ref = self.db.collection("bubbles").document(bubble_id)
 
         # Idempotency check
@@ -134,7 +155,10 @@ class ChatService:
             )
             if existing:
                 doc = existing[0]
-                return Message(**doc.to_dict())
+                data = doc.to_dict() or {}
+                if data.get("is_anonymous"):
+                    data.update({"author_id": f"anonymous-{data.get('id', doc.id)}", "author_name": "Anonymous", "author_avatar": None, "author_animal": None})
+                return Message(**data)
 
         @firestore.async_transactional
         async def _post_msg_tx(transaction: firestore.AsyncTransaction) -> Message:
@@ -150,7 +174,8 @@ class ChatService:
             next_seq = b_data.get("last_seq", 0) + 1
             transaction.update(bubble_ref, {"last_seq": next_seq, "updated_at": firestore.SERVER_TIMESTAMP})
 
-            is_anon = req.is_anonymous if req.is_anonymous is not None else b_data.get("anonymous_mode_enabled", False)
+            anonymous_allowed = bool(b_data.get("anonymous_mode_enabled", False))
+            is_anon = bool(req.is_anonymous) and anonymous_allowed
             author_display = "Anonymous" if is_anon else user_name
             author_av = None if is_anon else user_avatar
 
@@ -163,6 +188,7 @@ class ChatService:
                 "author_id": user_id,
                 "author_name": author_display,
                 "author_avatar": author_av,
+                "author_animal": None if is_anon else user_animal,
                 "is_anonymous": is_anon,
                 "text": req.text,
                 "attachments": [a.model_dump(mode="json") for a in req.attachments] if req.attachments else None,
@@ -183,6 +209,12 @@ class ChatService:
 
         tx = self.db.transaction()
         created_msg = await _post_msg_tx(tx)
+
+        if created_msg.is_anonymous:
+            created_msg.author_id = f"anonymous-{created_msg.id}"
+            created_msg.author_name = "Anonymous"
+            created_msg.author_avatar = None
+            created_msg.author_animal = None
 
         # Broadcast message to live SSE stream for real-time peer synchronization
         try:

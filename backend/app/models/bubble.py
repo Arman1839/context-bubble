@@ -21,6 +21,7 @@ class BubbleMember(BaseModel):
     id: str
     name: str
     avatar: Optional[str] = None
+    avatar_animal: Optional[str] = None
     role: Role = "participant"
     joined_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -53,6 +54,8 @@ class CreateBubbleRequest(BaseModel):
     duration_minutes: int = Field(default=120, ge=5, le=1440)
     retention_policy: RetentionPolicy = "temporary"
     anonymous_mode_enabled: bool = False
+    host_avatar_url: Optional[str] = None
+    host_avatar_animal: Optional[str] = None
     trigger_mode: AITriggerMode = "mention"
     token_budget: Optional[int] = Field(default=250000, ge=10000, le=1000000)
     e2ee_enabled: bool = False
@@ -62,6 +65,8 @@ class CreateBubbleRequest(BaseModel):
 class JoinBubbleRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=50)
     avatar_url: Optional[str] = None
+    avatar_animal: Optional[str] = None
+    join_code: Optional[str] = None
 
 
 class ExtendBubbleRequest(BaseModel):
@@ -74,6 +79,7 @@ class UpdateTriggerModeRequest(BaseModel):
 
 class BubbleResponse(BaseModel):
     id: str
+    join_code: Optional[str] = None
     title: str
     is_live: bool = True
     expires_at: Optional[datetime] = None
