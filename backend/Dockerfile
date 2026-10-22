@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-COPY requirements.txt .
+# Install python dependencies from backend
+COPY backend/requirements.txt requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Copy backend application source
-COPY . .
+COPY backend/ .
 
 # Run as non-root user for security
 RUN useradd -m appuser && chown -R appuser /app
