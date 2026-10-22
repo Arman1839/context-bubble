@@ -2,8 +2,7 @@ services:
   - type: web
     name: context-bubble-backend
     runtime: docker
-    dockerfilePath: backend/Dockerfile
-    dockerContext: backend
+    dockerfilePath: Dockerfile
     plan: free
     autoDeploy: true
     envVars:
