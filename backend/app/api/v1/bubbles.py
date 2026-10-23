@@ -214,6 +214,29 @@ async def get_bubble(
     if not snap.exists:
         if bubble_id == "demo":
             now = datetime.now(timezone.utc)
+            demo_doc = {
+                "id": "demo",
+                "title": "Pivot Decision – Oct 2026",
+                "is_live": True,
+                "expires_at": now + timedelta(hours=2, minutes=14),
+                "member_count": 6,
+                "retention_policy": "temporary-plus-record",
+                "anonymous_mode_enabled": False,
+                "host_id": "priya",
+                "pop_state": "ACTIVE",
+                "trigger_mode": "mention",
+                "token_budget": 250000,
+                "tokens_used": 0,
+                "e2ee_enabled": False,
+                "last_seq": 0,
+                "created_at": firestore.SERVER_TIMESTAMP,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+                "join_code": "demo",
+            }
+            try:
+                await bubbles_ref.document("demo").set(demo_doc)
+            except Exception:
+                pass
             return BubbleResponse(
                 id="demo",
                 title="Pivot Decision – Oct 2026",

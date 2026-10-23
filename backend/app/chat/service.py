@@ -71,9 +71,33 @@ class ChatService:
         async def _join_tx(transaction: firestore.AsyncTransaction) -> BubbleMember:
             b_snap = await bubble_ref.get(transaction=transaction)
             if not b_snap.exists:
-                raise BubbleNotFoundException(bubble_id)
-
-            b_data = b_snap.to_dict() or {}
+                if bubble_id == "demo":
+                    now = datetime.now(timezone.utc)
+                    demo_data = {
+                        "id": "demo",
+                        "title": "Pivot Decision – Oct 2026",
+                        "is_live": True,
+                        "expires_at": now + timedelta(hours=2, minutes=14),
+                        "member_count": 6,
+                        "retention_policy": "temporary-plus-record",
+                        "anonymous_mode_enabled": False,
+                        "host_id": "priya",
+                        "pop_state": "ACTIVE",
+                        "trigger_mode": "mention",
+                        "token_budget": 250000,
+                        "tokens_used": 0,
+                        "e2ee_enabled": False,
+                        "last_seq": 0,
+                        "created_at": firestore.SERVER_TIMESTAMP,
+                        "updated_at": firestore.SERVER_TIMESTAMP,
+                        "join_code": "demo",
+                    }
+                    transaction.set(bubble_ref, demo_data)
+                    b_data = demo_data
+                else:
+                    raise BubbleNotFoundException(bubble_id)
+            else:
+                b_data = b_snap.to_dict() or {}
             if b_data.get("pop_state") != "ACTIVE":
                 raise BubblePoppedException(bubble_id)
 
@@ -164,9 +188,33 @@ class ChatService:
         async def _post_msg_tx(transaction: firestore.AsyncTransaction) -> Message:
             b_snap = await bubble_ref.get(transaction=transaction)
             if not b_snap.exists:
-                raise BubbleNotFoundException(bubble_id)
-
-            b_data = b_snap.to_dict() or {}
+                if bubble_id == "demo":
+                    now = datetime.now(timezone.utc)
+                    demo_data = {
+                        "id": "demo",
+                        "title": "Pivot Decision – Oct 2026",
+                        "is_live": True,
+                        "expires_at": now + timedelta(hours=2, minutes=14),
+                        "member_count": 6,
+                        "retention_policy": "temporary-plus-record",
+                        "anonymous_mode_enabled": False,
+                        "host_id": "priya",
+                        "pop_state": "ACTIVE",
+                        "trigger_mode": "mention",
+                        "token_budget": 250000,
+                        "tokens_used": 0,
+                        "e2ee_enabled": False,
+                        "last_seq": 0,
+                        "created_at": firestore.SERVER_TIMESTAMP,
+                        "updated_at": firestore.SERVER_TIMESTAMP,
+                        "join_code": "demo",
+                    }
+                    transaction.set(bubble_ref, demo_data)
+                    b_data = demo_data
+                else:
+                    raise BubbleNotFoundException(bubble_id)
+            else:
+                b_data = b_snap.to_dict() or {}
             if b_data.get("pop_state") != "ACTIVE":
                 raise BubblePoppedException(bubble_id)
 
