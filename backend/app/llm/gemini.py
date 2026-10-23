@@ -20,13 +20,10 @@ from app.llm.base import LLMAdapter, LLMResponse
 
 T = TypeVar("T", bound=BaseModel)
 
-# Default candidate models in order of priority for resilient failover
+# Default candidate models in order of priority for resilient failover (strictly 3.5-flash-lite and 3.1-flash-lite)
 _CANDIDATE_GENERATION_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.8-flash",
-    "gemini-3.1-flash-lite-preview",
 ]
 
 _CANDIDATE_EMBEDDING_MODELS = [
@@ -138,10 +135,12 @@ class GeminiAdapter(LLMAdapter):
         return self._model_name
 
     def _get_generation_models(self) -> List[str]:
-        """Returns ordered list of candidate models with preferred model first."""
-        models = [self._model_name]
+        """Returns ordered list of candidate models with preferred model first, strictly constrained."""
+        allowed = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+        pref = self._model_name if self._model_name in allowed else "gemini-3.5-flash-lite"
+        models = [pref]
         for m in _CANDIDATE_GENERATION_MODELS:
-            if m not in models:
+            if m in allowed and m not in models:
                 models.append(m)
         return models
 
@@ -467,6 +466,21 @@ class GeminiAdapter(LLMAdapter):
         elif schema and "Insight" in schema.__name__:
             return json.dumps({
                 "summary": "Team aligned on key product priorities and identified next steps.",
+                "disagreements": [
+                    {
+                        "id": "d1",
+                        "sideA": {"count": 2, "label": "Retention overhaul"},
+                        "sideB": {"count": 1, "label": "Pricing adjustment"}
+                    }
+                ],
+                "missing_pieces": [
+                    {
+                        "id": "mp1",
+                        "description": "Recent customer churn survey data",
+                        "action": "request",
+                        "actionLabel": "Request data"
+                    }
+                ],
                 "insights": [
                     {
                         "insight_id": "ins-1",

@@ -125,9 +125,31 @@ class IntelligenceSynthesizer:
             logger.info(f"Synthesis skipped: bubble {bubble_id} is in {bubble_data.get('pop_state')} state.")
             return
 
+        # Broadcast start of synthesis so UI shows active synthesizing indicator
+        await stream_manager.broadcast(
+            bubble_id=bubble_id,
+            event_type="token",
+            data={"token": ""}
+        )
+
         # 1. Fetch recent contributions and previous summary
-        contributions_col = bubble_ref.collection("contributions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15)
-        recent_contrib_docs = await contributions_col.get()
+        recent_contrib_docs = []
+        try:
+            contributions_col = bubble_ref.collection("contributions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15)
+            recent_contrib_docs = await contributions_col.get()
+        except Exception as q_err:
+            logger.warning(f"Error querying contributions by timestamp: {q_err}. Falling back to unordered limit.")
+            try:
+                recent_contrib_docs = await bubble_ref.collection("contributions").limit(15).get()
+            except Exception:
+                recent_contrib_docs = []
+
+        if not recent_contrib_docs:
+            try:
+                recent_contrib_docs = await bubble_ref.collection("messages").limit(15).get()
+            except Exception:
+                pass
+
         if not recent_contrib_docs:
             return
 
@@ -157,12 +179,17 @@ class IntelligenceSynthesizer:
                     pass
 
         # 3. Assemble RAG context
-        rag_context = await self.rag.assemble_context(
-            bubble_id=bubble_id,
-            latest_text=all_recent_str,
-            previous_summary=prev_summary,
-            top_k=4,
-        )
+        rag_context = ""
+        try:
+            rag_context = await self.rag.assemble_context(
+                bubble_id=bubble_id,
+                latest_text=all_recent_str,
+                previous_summary=prev_summary,
+                top_k=4,
+            )
+        except Exception as rag_err:
+            logger.warning(f"RAG context assembly skipped for bubble {bubble_id}: {rag_err}")
+            rag_context = f"### CURRENT ROLLING SUMMARY:\n{prev_summary}\n" if prev_summary else ""
 
         system_prompt = (
             "You are the Live Intelligence engine for an ephemeral high-stakes team collaboration room (Context Bubble).\n"
@@ -346,7 +373,9 @@ You MUST output a valid JSON object matching this structure:
             "summary": clean_summary,
             "disagreements": disagreements,
             "missingPieces": missing_pieces,
+            "missing_pieces": missing_pieces,
             "nextSteps": next_steps,
+            "next_steps": next_steps,
             "raw_insights": [i.model_dump(mode="json") for i in effective_insights],
             "updated_at": firestore.SERVER_TIMESTAMP,
         }
@@ -376,7 +405,9 @@ You MUST output a valid JSON object matching this structure:
                 "summary": clean_summary,
                 "disagreements": disagreements,
                 "missingPieces": missing_pieces,
+                "missing_pieces": missing_pieces,
                 "nextSteps": next_steps,
+                "next_steps": next_steps,
                 "raw_insights": [insight.model_dump(mode="json") for insight in effective_insights],
             }
         )
@@ -388,7 +419,9 @@ You MUST output a valid JSON object matching this structure:
                 "summary": clean_summary,
                 "disagreements": disagreements,
                 "missingPieces": missing_pieces,
+                "missing_pieces": missing_pieces,
                 "deltas": delta_payload,
+                "nextSteps": next_steps,
                 "next_steps": next_steps,
                 "raw_insights": [insight.model_dump(mode="json") for insight in effective_insights],
             }

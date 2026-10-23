@@ -85,7 +85,7 @@ export function ContributionFeed({
               💬
             </div>
             <p className="text-sm font-medium text-slate-400">No contributions yet</p>
-            <p className="text-xs mt-1 text-slate-500">Start the conversation below or type @AI to ask for synthesis.</p>
+            <p className="text-xs mt-1 text-slate-500">Share your thoughts below to start the deliberation.</p>
           </div>
         ) : (
           contributions.map((c) => (

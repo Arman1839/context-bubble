@@ -13,16 +13,9 @@ def get_llm_adapter() -> LLMAdapter:
     if _current_adapter is not None:
         return _current_adapter
 
-    provider = settings.LLM_PROVIDER.lower()
-    if provider == "anthropic":
-        primary = AnthropicAdapter()
-        secondary = GeminiAdapter()
-    else:
-        primary = GeminiAdapter()
-        secondary = AnthropicAdapter()
-
-    # Never treat a mock adapter as a real production fallback.
-    fallback = secondary if getattr(secondary, "_client", None) is not None else None
+    # Strictly Gemini 3.5 Flash Lite default and Gemini 3.1 Flash Lite fallback
+    primary = GeminiAdapter(model_name=settings.GEMINI_MODEL)
+    fallback = GeminiAdapter(model_name=settings.GEMINI_FALLBACK_MODEL) if getattr(primary, "_client", None) is not None else None
     _current_adapter = ResilientLLMAdapter(primary=primary, fallback=fallback)
     return _current_adapter
 

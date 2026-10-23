@@ -4,7 +4,7 @@ import React, { useMemo, useState } from "react";
 import type { Contribution, Intelligence, KnowledgeGraph, Insight, NodeType, ReactFlowNode } from "@/types";
 import { KnowledgeGraphVisualizer } from "./KnowledgeGraphVisualizer";
 
-function keepOverviewSentences(value: string): string {
+function keepOverviewSentences(value: string, maxSentences = 3): string {
   const sentenceEnds: number[] = [];
   for (const match of value.matchAll(/[.!?](?=\s+[A-Z0-9])/g)) {
     const index = match.index ?? -1;
@@ -13,7 +13,10 @@ function keepOverviewSentences(value: string): string {
     if (/\b(?:Mr|Mrs|Ms|Dr)\.$/i.test(preceding)) continue;
     sentenceEnds.push(index);
   }
-  return sentenceEnds.length > 0 ? value.slice(0, sentenceEnds[0] + 1).trim() : value;
+  if (sentenceEnds.length >= maxSentences) {
+    return value.slice(0, sentenceEnds[maxSentences - 1] + 1).trim();
+  }
+  return value.trim();
 }
 
 function cleanLiveSummary(value: string): string {
@@ -77,8 +80,9 @@ export function LiveIntelligencePanel({
   const rawInsights = intelligence.raw_insights || [];
   const summaryText = cleanLiveSummary(intelligence.summary || "");
   const disagreementsList = intelligence.disagreements || [];
-  const missingPiecesList = intelligence.missingPieces || [];
-  const structuredNextSteps = (intelligence.nextSteps || []).filter((step) => typeof step === "string" && step.trim());
+  const missingPiecesList = intelligence.missingPieces || (intelligence as any).missing_pieces || [];
+  const rawNextSteps = intelligence.nextSteps || (intelligence as any).next_steps || [];
+  const structuredNextSteps = (Array.isArray(rawNextSteps) ? rawNextSteps : []).filter((step: any) => typeof step === "string" && step.trim());
   const nextSteps = structuredNextSteps.length
     ? structuredNextSteps
     : rawInsights.filter((insight) => insight.type === "action_item" && insight.text.trim()).map((insight) => insight.text.trim()).slice(0, 4);

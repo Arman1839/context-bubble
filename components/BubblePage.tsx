@@ -25,13 +25,14 @@ interface Props {
 function mergeIntelligence(previous: Bubble["intelligence"], incoming: Partial<Bubble["intelligence"]>, allowEmptyLists = false) {
   const keepOrReplace = <T,>(oldItems: T[], nextItems: T[] | undefined) =>
     Array.isArray(nextItems) && (allowEmptyLists || nextItems.length > 0) ? nextItems : oldItems;
+  const missingPiecesIncoming = incoming.missingPieces ?? (incoming as any).missing_pieces;
   const nextStepsIncoming = incoming.nextSteps ?? (incoming as Partial<Bubble["intelligence"]> & { next_steps?: string[] }).next_steps;
   return {
     ...previous,
     ...incoming,
     summary: typeof incoming.summary === "string" && incoming.summary.trim() ? incoming.summary : previous.summary,
     disagreements: keepOrReplace(previous.disagreements, incoming.disagreements),
-    missingPieces: keepOrReplace(previous.missingPieces, incoming.missingPieces),
+    missingPieces: keepOrReplace(previous.missingPieces, missingPiecesIncoming),
     nextSteps: keepOrReplace(previous.nextSteps, nextStepsIncoming),
     raw_insights: keepOrReplace(previous.raw_insights || [], incoming.raw_insights),
   };
@@ -456,16 +457,10 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, joinCo
       onDelta: (delta: any) => {
         setIsSynthesizing(false);
         setStreamingToken("");
-        if (delta && delta.summary) {
+        if (delta) {
           setBubble((prev) => ({
             ...prev,
-            intelligence: {
-              ...prev.intelligence,
-              summary: typeof delta.summary === "string" && delta.summary.trim() ? delta.summary : prev.intelligence.summary,
-              disagreements: Array.isArray(delta.disagreements) && delta.disagreements.length ? delta.disagreements : prev.intelligence.disagreements,
-              missingPieces: Array.isArray(delta.missingPieces) && delta.missingPieces.length ? delta.missingPieces : prev.intelligence.missingPieces,
-              nextSteps: Array.isArray(delta.next_steps || delta.nextSteps) && (delta.next_steps || delta.nextSteps).length ? (delta.next_steps || delta.nextSteps) : prev.intelligence.nextSteps,
-            },
+            intelligence: mergeIntelligence(prev.intelligence, delta),
           }));
         }
       },
@@ -540,10 +535,11 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, joinCo
             return true;
           });
 
-          // Strictly deduplicate by id
+          // Strictly deduplicate by id and filter out any AI messages from the deliberation feed
           const seen = new Set<string>();
           const deduped: Contribution[] = [];
           for (const item of [...backendMsgs, ...stillPending]) {
+            if (item.authorId === "bubble-ai" || item.authorName === "Bubble AI") continue;
             if (!seen.has(item.id)) {
               seen.add(item.id);
               deduped.push(item);
