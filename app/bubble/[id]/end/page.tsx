@@ -13,3 +13,7 @@ async function EndBubbleRoute({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return <EndBubblePage bubbleId={id} />;
 }
+
+export async function generateStaticParams() {
+  return [{ id: "demo" }];
+}

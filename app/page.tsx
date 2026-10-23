@@ -8,11 +8,26 @@ import { AuthModal } from "@/components/auth/AuthModal";
 export default function LandingPage() {
   const { user, signOut } = useFirebaseAuth();
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-
   return (
-    <div className="min-h-screen bg-[#0d0f1a] text-slate-100 flex flex-col selection:bg-violet-500/30">
+    <div className="relative min-h-screen overflow-hidden bg-[#0d0f1a] text-slate-100 flex flex-col selection:bg-violet-500/30">
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
+        <span className="ambient-bubble ambient-bubble--1">🐼</span>
+        <span className="ambient-bubble ambient-bubble--2">🦊</span>
+        <span className="ambient-bubble ambient-bubble--3">🐸</span>
+        <span className="ambient-bubble ambient-bubble--4">🐱</span>
+        <span className="ambient-bubble ambient-bubble--5">🦉</span>
+        <span className="ambient-bubble ambient-bubble--6">🐧</span>
+        <span className="ambient-bubble ambient-bubble--7">🐶</span>
+        <span className="ambient-bubble ambient-bubble--8">🦄</span>
+        <span className="ambient-bubble ambient-bubble--9">🐨</span>
+        <span className="ambient-bubble ambient-bubble--10">🐰</span>
+        <span className="ambient-bubble ambient-bubble--11">🦁</span>
+        <span className="ambient-bubble ambient-bubble--12">🐯</span>
+        <span className="ambient-bubble ambient-bubble--13">🐻</span>
+        <span className="ambient-bubble ambient-bubble--14">🐹</span>
+      </div>
       {/* Navigation Header */}
-      <header className="border-b border-white/10 bg-[#111827]/80 backdrop-blur-md sticky top-0 z-50">
+      <header className="relative z-20 border-b border-white/10 bg-[#111827]/80 backdrop-blur-md sticky top-0">
         <div className="max-w-6xl mx-auto px-5 py-3.5 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md group-hover:scale-105 transition-transform">
@@ -25,17 +40,7 @@ export default function LandingPage() {
             {/* Authenticated User Pill or Sign In Button */}
             {user && user.displayName ? (
               <div className="flex items-center gap-2 bg-[#1a2236] border border-white/10 rounded-full pl-2 pr-3 py-1">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={
-                    user.photoURL ||
-                    `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(
-                      user.displayName
-                    )}&backgroundColor=b6e3f4`
-                  }
-                  alt={user.displayName}
-                  className="w-6 h-6 rounded-full"
-                />
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-violet-600 text-xs font-semibold text-white" aria-hidden="true">{user.displayName.trim().charAt(0).toUpperCase()}</span>
                 <span className="text-xs text-slate-200 font-medium max-w-[120px] truncate">
                   {user.displayName}
                 </span>
@@ -63,7 +68,7 @@ export default function LandingPage() {
             >
               Join Bubble
             </Link>
-            {user && <Link href="/history" className="text-xs font-medium text-slate-200 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 hover:bg-[#1a2236] transition-colors">Previous Bubbles</Link>}
+            {user && <Link href="/history" className="text-xs font-medium text-slate-200 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 hover:bg-[#1a2236] transition-colors">My Bubbles</Link>}
             <Link
               href="/bubble/create"
               className="text-xs font-semibold text-white px-3.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 shadow-md shadow-violet-900/30 transition-colors"
@@ -81,12 +86,12 @@ export default function LandingPage() {
           onClose={() => setIsAuthOpen(false)}
           onSuccess={() => setIsAuthOpen(false)}
           title="Sign In to Context Bubble"
-          subtitle="Authenticate beforehand with Google or your name before creating or joining rooms."
+          subtitle="Sign in with email and password before creating or joining rooms."
         />
       )}
 
       {/* Hero Section */}
-      <main className="flex-1 max-w-6xl mx-auto px-5 py-16 sm:py-24 flex flex-col items-center text-center">
+      <main className="relative z-10 flex-1 max-w-6xl mx-auto px-5 py-16 sm:py-24 flex flex-col items-center text-center">
         {/* Badge */}
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 text-xs font-medium mb-6">
           <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
@@ -176,3 +181,4 @@ export default function LandingPage() {
     </div>
   );
 }
+

@@ -121,8 +121,19 @@ async def get_bubble_participant(
     db = get_async_firestore_client()
     bubble_snap = await db.collection("bubbles").document(bubble_id).get()
     if not bubble_snap.exists:
+        if bubble_id == "demo":
+            return {"id": user.uid, "name": user.name, "role": "participant"}
         raise BubbleNotFoundException(bubble_id)
     bubble_data = bubble_snap.to_dict() or {}
+    removed_snap = await (
+        db.collection("bubbles").document(bubble_id)
+        .collection("removed_participants").document(user.uid).get()
+    )
+    if removed_snap.exists:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You were removed by the host and cannot rejoin this bubble.",
+        )
     if bubble_data.get("pop_state") == "POPPED" and bubble_data.get("retention_policy") == "view-only":
         view_until = bubble_data.get("view_until")
         if isinstance(view_until, str):

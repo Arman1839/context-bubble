@@ -26,6 +26,7 @@ export interface Attachment {
   file_id?: string;
   mime_type?: string;
   size_bytes?: number;
+  preview_text?: string;
 }
 
 export interface Contribution {
@@ -34,6 +35,7 @@ export interface Contribution {
   authorId: string;
   authorName: string;
   authorAvatar?: string;
+  authorAnimal?: string;
   isAnonymous: boolean;
   text: string;
   timestamp: Date;
@@ -159,6 +161,12 @@ export interface DisagreementSummary {
   unresolved_questions: string[];
 }
 
+export interface GraphRelationshipSummary {
+  total_nodes: number;
+  total_edges: number;
+  key_relationships: string[];
+}
+
 export interface ExecutiveBriefing {
   bubble_id: string;
   bubble_title: string;
@@ -169,6 +177,7 @@ export interface ExecutiveBriefing {
   disagreements: DisagreementSummary[];
   blockers: string[];
   action_items: ActionItem[];
+  graph_summary?: GraphRelationshipSummary;
   markdown_content?: string;
 }
 
@@ -191,6 +200,8 @@ export interface BubbleMember {
   id: string;
   name: string;
   avatar?: string;
+  avatar_animal?: string;
+  isOnline?: boolean;
   role?: Role;
   joined_at?: string | Date;
   last_seen_at?: string | Date;
@@ -198,6 +209,7 @@ export interface BubbleMember {
 
 export interface Bubble {
   id: string;
+  joinCode?: string;
   title: string;
   isLive: boolean;
   expiresAt: Date;

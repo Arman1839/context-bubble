@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import type { Contribution } from "@/types";
+import { DocumentPreview } from "./DocumentPreview";
 
 interface Props {
   contribution: Contribution;
@@ -22,6 +23,7 @@ function computeTimeAgo(date: Date): string {
 export function ContributionCard({ contribution, hideAttachments = false }: Props) {
   const isAnon = contribution.isAnonymous;
   const isAI = contribution.authorId === "bubble-ai" || contribution.authorName === "Bubble AI";
+  const [previewAttachment, setPreviewAttachment] = useState<NonNullable<Contribution["attachments"]>[number] | null>(null);
 
   // Compute relative timestamp dynamically on client
   const [timeAgo, setTimeAgo] = useState<string>(() => computeTimeAgo(contribution.timestamp));
@@ -47,7 +49,7 @@ export function ContributionCard({ contribution, hideAttachments = false }: Prop
       }`}
     >
       {/* Avatar */}
-      <div className="shrink-0 mt-0.5">
+      <div className="relative shrink-0 mt-0.5">
         {isAI ? (
           <div className="w-10 h-10 rounded-full bg-violet-600/20 border border-violet-400/40 flex items-center justify-center text-violet-300 shadow-[0_0_10px_rgba(139,92,246,0.3)]">
             <svg className="w-5 h-5 text-violet-300" fill="currentColor" viewBox="0 0 24 24">
@@ -60,10 +62,14 @@ export function ContributionCard({ contribution, hideAttachments = false }: Prop
               <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
             </svg>
           </div>
+        ) : contribution.authorAnimal ? (
+          <div className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-slate-800 text-2xl" role="img" aria-label={`${contribution.authorName}'s animal avatar`}>
+            {contribution.authorAnimal}
+          </div>
         ) : (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
-            src={contribution.authorAvatar}
+            src={contribution.authorAvatar || `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(contribution.authorId || contribution.authorName)}`}
             alt={contribution.authorName}
             className="w-10 h-10 rounded-full bg-slate-700 object-cover"
           />
@@ -111,18 +117,7 @@ export function ContributionCard({ contribution, hideAttachments = false }: Prop
         {!hideAttachments && contribution.attachments && contribution.attachments.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {contribution.attachments.map((att, i) => (
-              <a
-                key={i}
-                href={att.url || undefined}
-                target={att.url ? "_blank" : undefined}
-                rel={att.url ? "noopener noreferrer" : undefined}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0d1117] border border-white/10 text-slate-300 text-xs ${att.url ? "cursor-pointer hover:border-violet-400/50 hover:text-white" : ""}`}
-                aria-label={att.url ? `Open uploaded file ${att.label}` : att.label}
-              >
-                {att.type === "image" && att.url ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img src={att.url} alt={att.label} className="w-10 h-10 rounded object-cover shrink-0" />
-                ) : null}
+              att.type === "link" ? <a key={i} href={att.url || undefined} target={att.url ? "_blank" : undefined} rel={att.url ? "noopener noreferrer" : undefined} className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#0d1117] px-3 py-1.5 text-xs text-slate-300 hover:border-violet-400/50 hover:text-white" aria-label={att.label}>
                 {att.type === "link" && (
                   <div className="w-4 h-4 rounded-full bg-violet-500 flex items-center justify-center shrink-0">
                     <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 24 24">
@@ -131,11 +126,19 @@ export function ContributionCard({ contribution, hideAttachments = false }: Prop
                   </div>
                 )}
                 {att.label}
-              </a>
+              </a> : <button key={i} type="button" onClick={() => setPreviewAttachment(att)} className="flex cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-[#0d1117] px-3 py-1.5 text-xs text-slate-300 hover:border-violet-400/50 hover:text-white" aria-label={`Preview uploaded file ${att.label}`}>
+                {att.type === "image" && att.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={att.url} alt="" className="h-10 w-10 shrink-0 rounded object-cover" />
+                ) : <span aria-hidden="true">{att.type === "audio" ? "🎙️" : "📄"}</span>}
+                <span>{att.label}</span>
+                <span className="text-[10px] text-violet-300">Preview</span>
+              </button>
             ))}
           </div>
         )}
       </div>
+      {previewAttachment && <DocumentPreview attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />}
     </div>
   );
 }

@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RetentionPolicy, AITriggerMode } from "@/types";
-import { createBubble } from "@/lib/api";
+import { createBubble, updateBubbleHostIdentity } from "@/lib/api";
 import { useFirebaseAuth } from "@/lib/auth";
 import { AuthModal } from "@/components/auth/AuthModal";
+import { AvatarPicker } from "@/components/participant/AvatarPicker";
+import { getAvatarUrl, getSavedAvatarProfile } from "@/lib/avatar-profile";
+import { AmbientBubbles } from "@/components/layout/AmbientBubbles";
 
 export default function CreateBubblePage() {
   const router = useRouter();
@@ -22,10 +25,17 @@ export default function CreateBubblePage() {
   const [tokenBudget, setTokenBudget] = useState(250000);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hostDisplayName, setHostDisplayName] = useState("");
+  const [isEnteringWorkspace, setIsEnteringWorkspace] = useState(false);
+
+  useEffect(() => {
+    if (user?.displayName) setHostDisplayName((current) => current || user.displayName || "");
+  }, [user?.displayName]);
 
   // Success State
   const [createdBubble, setCreatedBubble] = useState<{
     id: string;
+    joinCode: string;
     title: string;
     retention: RetentionPolicy;
     inviteUrl: string;
@@ -56,15 +66,23 @@ export default function CreateBubblePage() {
         duration_minutes: durationMinutes,
         retention_policy: retentionPolicy,
         anonymous_mode_enabled: anonymousMode,
+        host_avatar_url: user && getSavedAvatarProfile(user.uid).kind === "human"
+          ? getAvatarUrl(user.uid, user.displayName || "Host", getSavedAvatarProfile(user.uid).style)
+          : undefined,
+        host_avatar_animal: user && getSavedAvatarProfile(user.uid).kind === "animal"
+          ? getSavedAvatarProfile(user.uid).animal
+          : undefined,
         trigger_mode: triggerMode,
         token_budget: tokenBudget,
       });
 
       const origin = typeof window !== "undefined" ? window.location.origin : "";
-      const inviteUrl = `${origin}/join?code=${res.id}`;
+      const joinCode = res.join_code || res.id;
+      const inviteUrl = `${origin}/join?code=${joinCode}`;
 
       setCreatedBubble({
         id: res.id,
+        joinCode,
         title: res.title,
         retention: res.retention_policy,
         inviteUrl,
@@ -90,22 +108,49 @@ export default function CreateBubblePage() {
     }
   }
 
-  function handleEnterWorkspace() {
-    if (!createdBubble) return;
+  async function handleEnterWorkspace() {
+    if (!createdBubble || !user) return;
+    const displayName = hostDisplayName.trim();
+    if (!displayName) {
+      setError("Enter your display name before entering the workspace.");
+      return;
+    }
+    setIsEnteringWorkspace(true);
+    setError(null);
+    try {
+      const avatarProfile = getSavedAvatarProfile(user.uid);
+      await updateBubbleHostIdentity(createdBubble.id, {
+        display_name: displayName,
+        avatar_url: avatarProfile.kind === "human" ? getAvatarUrl(user.uid, displayName, avatarProfile.style) : undefined,
+        avatar_animal: avatarProfile.kind === "animal" ? avatarProfile.animal : undefined,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update your meeting identity.");
+      setIsEnteringWorkspace(false);
+      return;
+    }
     const searchParams = new URLSearchParams({
       role: "host",
       title: createdBubble.title,
-      user: user?.displayName || "Host",
+      user: displayName,
     });
-    router.push(`/bubble/${createdBubble.id}?${searchParams.toString()}`);
+    // Replace the creation screen so browser Back cannot restore its stale
+    // "Bubble Created" state after this bubble has been ended.
+    const targetUrl = `/bubble/${createdBubble.id}?${searchParams.toString()}`;
+    if (typeof window !== "undefined") {
+      window.location.replace(targetUrl);
+    } else {
+      router.replace(targetUrl);
+    }
   }
 
   const isUserAuthenticated = Boolean(user && user.displayName);
 
   return (
-    <div className="min-h-screen bg-[#0d0f1a] text-slate-100 flex flex-col selection:bg-violet-500/30">
+    <div className="relative isolate min-h-screen overflow-hidden bg-[#0d0f1a] text-slate-100 flex flex-col selection:bg-violet-500/30">
+      <AmbientBubbles />
       {/* Header */}
-      <header className="border-b border-white/10 bg-[#111827]/80 backdrop-blur-md px-5 py-3.5">
+      <header className="relative z-10 border-b border-white/10 bg-[#111827]/80 backdrop-blur-md px-5 py-3.5">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md group-hover:scale-105 transition-transform">
@@ -116,17 +161,7 @@ export default function CreateBubblePage() {
           <div className="flex items-center gap-3">
             {user && user.displayName && (
               <div className="flex items-center gap-2 text-xs text-slate-300 bg-[#1a2236] px-2.5 py-1 rounded-full border border-white/10">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={
-                    user.photoURL ||
-                    `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(
-                      user.displayName || "Host"
-                    )}&backgroundColor=b6e3f4`
-                  }
-                  alt={user.displayName || "Host"}
-                  className="w-5 h-5 rounded-full"
-                />
+                <span className="grid h-5 w-5 place-items-center rounded-full bg-violet-600 text-[10px] font-semibold text-white" aria-hidden="true">{(user.displayName || "H").trim().charAt(0).toUpperCase()}</span>
                 <span className="font-medium max-w-[120px] truncate">{user.displayName}</span>
                 <button
                   type="button"
@@ -148,29 +183,23 @@ export default function CreateBubblePage() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-2xl w-full mx-auto px-5 py-10 sm:py-14">
-        {/* Step 1: Upfront Authentication Gate if not signed in */}
+      <main className="relative z-10 flex-1 max-w-2xl w-full mx-auto px-5 py-10 sm:py-14">
+        {/* Authentication is completed before bubble setup. */}
         {!authLoading && (!user || !user.displayName) && !createdBubble && (
           <div className="flex flex-col items-center">
             <AuthModal
               isInline={true}
-              title="Step 1 of 2: Sign In as Host"
+              title="Sign In as Host"
               subtitle="Please sign in or identify yourself beforehand so you are recognized as the session host."
               onSuccess={() => {}}
             />
           </div>
         )}
 
-        {/* Step 2: Room Creation Form */}
+        {/* Bubble creation is the only setup step. */}
         {user && user.displayName && !createdBubble && (
           <div className="rounded-2xl border border-white/10 bg-[#0f1525] p-6 sm:p-8 shadow-2xl">
             <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 text-xs font-medium">
-                  Host Workspace Setup
-                </div>
-                <span className="text-xs text-slate-400">Step 2 of 2</span>
-              </div>
               <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Create a Context Bubble</h1>
               <p className="text-slate-400 text-sm mt-1.5 leading-relaxed">
                 Configure your deliberation space. You will enter as the room <strong>Host</strong> with timer and export controls.
@@ -353,8 +382,8 @@ export default function CreateBubblePage() {
               {/* Anonymous Mode Toggle */}
               <div className="flex items-center justify-between p-3.5 rounded-xl border border-white/10 bg-[#161d2e]">
                 <div>
-                  <span className="text-xs font-semibold text-white block">Default Anonymous Participation</span>
-                  <span className="text-[11px] text-slate-400">Hide participant names by default</span>
+                  <span className="text-xs font-semibold text-white block">Allow anonymous participation</span>
+                  <span className="text-[11px] text-slate-400">Let each participant choose whether their messages are anonymous</span>
                 </div>
                 <input
                   type="checkbox"
@@ -402,11 +431,22 @@ export default function CreateBubblePage() {
               Your decision workspace <strong className="text-white">&ldquo;{createdBubble.title}&rdquo;</strong> is live. You are authenticated as <strong className="text-violet-300">{user?.displayName}</strong> (Host).
             </p>
 
+            <div className="mb-6 rounded-xl border border-white/10 bg-[#161d2e] p-4">
+              <h2 className="text-sm font-semibold text-white">Set your meeting identity</h2>
+              <p className="mt-1 text-xs text-slate-400">Choose the name and avatar participants will see. Your account name is filled in already.</p>
+              <label htmlFor="host-display-name" className="mt-4 block text-[11px] font-semibold uppercase tracking-wider text-slate-300">Display name</label>
+              <input id="host-display-name" type="text" maxLength={50} value={hostDisplayName} onChange={(e) => setHostDisplayName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0d1117] px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:border-violet-500/50 focus:outline-none" placeholder="Your name in this meeting" />
+              <div className="mt-4">
+                <AvatarPicker uid={user?.uid} name={hostDisplayName || user?.displayName || "Host"} />
+              </div>
+            </div>
+            {error && <p className="mb-4 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">{error}</p>}
+
             {/* Bubble Code & Invite Box */}
             <div className="rounded-xl border border-white/10 bg-[#161d2e] p-4 mb-6 flex flex-col gap-3">
               <div className="flex items-center justify-between text-xs text-slate-400">
-                <span>Bubble ID (Share with participants)</span>
-                <span className="font-mono text-violet-300 font-semibold text-sm">{createdBubble.id}</span>
+                <span>Join ID (Share with participants)</span>
+                <span className="font-mono text-violet-300 font-semibold text-sm">{createdBubble.joinCode}</span>
               </div>
               <div className="flex items-center gap-2 pt-2 border-t border-white/5">
                 <input
@@ -444,9 +484,10 @@ export default function CreateBubblePage() {
               <button
                 type="button"
                 onClick={handleEnterWorkspace}
-                className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-semibold text-sm shadow-lg shadow-violet-900/40 transition-colors"
+                disabled={isEnteringWorkspace || !hostDisplayName.trim()}
+                className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold text-sm shadow-lg shadow-violet-900/40 transition-colors"
               >
-                <span>Enter Workspace as Host</span>
+                <span>{isEnteringWorkspace ? "Preparing your workspace…" : "Enter Workspace as Host"}</span>
                 <span>&rarr;</span>
               </button>
               <button

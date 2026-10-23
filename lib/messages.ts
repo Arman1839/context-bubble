@@ -73,8 +73,10 @@ export function subscribeToBubbleMessages(
     try {
       const msgs = await fetchMessagesFromBackend(bubbleId);
       if (isSubscribed) onMessages(msgs);
-    } catch {
-      // Ignored
+    } catch (error) {
+      if (isSubscribed) {
+        onError?.(error instanceof Error ? error : new Error("Failed to refresh bubble messages"));
+      }
     }
   };
 
@@ -112,23 +114,24 @@ export async function fetchMessagesFromBackend(bubbleId: string): Promise<Contri
     const res = await fetch(`${backendUrl}/api/v1/bubbles/${bubbleId}/messages`, {
       headers,
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      throw new Error(`Failed to fetch bubble messages (${res.status})`);
+    }
     const list = await res.json();
     // Return oldest-first so the feed renders top→bottom like WhatsApp
-    return list.map((m: any) => ({
+    return list.filter((m: any) => m.type !== "ai" && m.author_id !== "bubble-ai" && m.author_name !== "Bubble AI").map((m: any) => ({
       id: m.id,
       bubble_id: m.bubble_id,
       authorId: m.author_id,
       authorName: m.author_name,
-      authorAvatar: m.is_anonymous
-        ? undefined
-        : `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(m.author_name)}&backgroundColor=ffd5dc`,
+      authorAvatar: m.is_anonymous ? undefined : m.author_avatar || undefined,
+      authorAnimal: m.is_anonymous ? undefined : m.author_animal || undefined,
       isAnonymous: m.is_anonymous,
       text: m.text,
       timestamp: m.created_at ? new Date(m.created_at) : new Date(),
       attachments: m.attachments,
     }));
-  } catch {
-    return [];
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("Failed to fetch bubble messages");
   }
 }

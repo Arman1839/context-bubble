@@ -76,6 +76,7 @@ async def test_all_api_endpoints_comprehensive():
         join_payload = {
             "display_name": "Bob the Builder",
             "avatar_url": "https://api.dicebear.com/9.x/notionists/svg?seed=bob",
+            "join_code": bubble_data.get("join_code"),
         }
         res = await client.post(f"/api/v1/bubbles/{bubble_id}/join", json=join_payload, headers=bob_headers)
         assert res.status_code == 200, res.text

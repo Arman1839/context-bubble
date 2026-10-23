@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-COPY requirements.txt .
+# Install python dependencies from backend
+COPY backend/requirements.txt requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Copy backend application source
-COPY . .
+COPY backend/ .
 
 # Run as non-root user for security
 RUN useradd -m appuser && chown -R appuser /app
@@ -26,4 +26,4 @@ USER appuser
 
 EXPOSE 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2"]

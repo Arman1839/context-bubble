@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.github
+out
+dist
+backend/.venv
+backend/__pycache__
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env*
+!backend/.env.example

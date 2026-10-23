@@ -20,16 +20,10 @@ from app.llm.base import LLMAdapter, LLMResponse
 
 T = TypeVar("T", bound=BaseModel)
 
-# Default candidate models in order of priority for resilient failover
+# Default candidate models in order of priority for resilient failover (strictly 3.5-flash-lite and 3.1-flash-lite)
 _CANDIDATE_GENERATION_MODELS = [
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
-    "gemini-3.6-flash",
-    "gemini-3-flash-preview",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
+    "gemini-3.1-flash-lite",
 ]
 
 _CANDIDATE_EMBEDDING_MODELS = [
@@ -141,10 +135,12 @@ class GeminiAdapter(LLMAdapter):
         return self._model_name
 
     def _get_generation_models(self) -> List[str]:
-        """Returns ordered list of candidate models with preferred model first."""
-        models = [self._model_name]
+        """Returns ordered list of candidate models with preferred model first, strictly constrained."""
+        allowed = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+        pref = self._model_name if self._model_name in allowed else "gemini-3.5-flash-lite"
+        models = [pref]
         for m in _CANDIDATE_GENERATION_MODELS:
-            if m not in models:
+            if m in allowed and m not in models:
                 models.append(m)
         return models
 
@@ -192,14 +188,18 @@ class GeminiAdapter(LLMAdapter):
         schema_dict = None
         if response_schema:
             config_dict["response_mime_type"] = "application/json"
-            if hasattr(response_schema, "model_json_schema"):
-                schema_dict = _clean_schema_for_gemini(response_schema.model_json_schema())
-                config_dict["response_schema"] = schema_dict
-            elif isinstance(response_schema, dict):
-                schema_dict = _clean_schema_for_gemini(response_schema)
-                config_dict["response_schema"] = schema_dict
-            else:
-                config_dict["response_schema"] = response_schema
+            # flash-lite models have a tokenizer/grammar bug with deep nested response_schema, causing token repetition loops.
+            # For flash-lite models, response_mime_type='application/json' with Pydantic model validation is optimal and avoids the bug.
+            is_flash_lite = "flash-lite" in (self._model_name or "").lower()
+            if not is_flash_lite:
+                if hasattr(response_schema, "model_json_schema"):
+                    schema_dict = _clean_schema_for_gemini(response_schema.model_json_schema())
+                    config_dict["response_schema"] = schema_dict
+                elif isinstance(response_schema, dict):
+                    schema_dict = _clean_schema_for_gemini(response_schema)
+                    config_dict["response_schema"] = schema_dict
+                else:
+                    config_dict["response_schema"] = response_schema
 
         assert types is not None
         config = types.GenerateContentConfig(**config_dict)
@@ -464,19 +464,95 @@ class GeminiAdapter(LLMAdapter):
                 "markdown_content": "# Executive Briefing\n\n- Onboarding overhaul agreed."
             })
         elif schema and "Insight" in schema.__name__:
-            return json.dumps({
-                "summary": "Team aligned on key product priorities and identified next steps.",
-                "insights": [
+            # Dynamically parse participant messages from prompt to synthesize from live chats
+            lines = [ln.strip() for ln in prompt.split("\n") if ln.strip().startswith("[") and "]:" in ln]
+            parsed_msgs = []
+            for ln in lines:
+                try:
+                    auth_part, msg_text = ln.split("]:", 1)
+                    author = auth_part.lstrip("[").strip()
+                    parsed_msgs.append((author, msg_text.strip()))
+                except Exception:
+                    pass
+
+            if parsed_msgs:
+                authors = list(dict.fromkeys([a for a, _ in parsed_msgs]))
+                first_author, first_msg = parsed_msgs[0]
+                latest_author, latest_msg = parsed_msgs[-1]
+                author_names = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
+
+                clean_first = first_msg[:100].rstrip(".?!")
+                clean_latest = latest_msg[:100].rstrip(".?!")
+
+                summary = (
+                    f"Team deliberation with {author_names} focused on {clean_first.lower()}. "
+                    f"Recent input from {latest_author} highlights {clean_latest.lower()}. "
+                    f"The group is actively synthesizing trade-offs to reach team consensus."
+                )
+
+                disagreements = []
+                if len(parsed_msgs) >= 2:
+                    p1_author, p1_text = parsed_msgs[0]
+                    p2_author, p2_text = parsed_msgs[-1] if parsed_msgs[-1][0] != p1_author else (parsed_msgs[1] if len(parsed_msgs) > 1 else (p1_author, p1_text))
+                    disagreements.append({
+                        "id": "d1",
+                        "sideA": {"count": max(1, len(parsed_msgs) // 2), "label": p1_text[:40].strip() or "primary proposal"},
+                        "sideB": {"count": max(1, (len(parsed_msgs) + 1) // 2), "label": p2_text[:40].strip() or "alternative approach"}
+                    })
+                else:
+                    disagreements.append({
+                        "id": "d1",
+                        "sideA": {"count": 1, "label": parsed_msgs[0][1][:40] or "current direction"},
+                        "sideB": {"count": 1, "label": "competing priority"}
+                    })
+
+                questions = [m for _, m in parsed_msgs if "?" in m]
+                missing_desc = questions[0].replace("?", "").strip() if questions else f"Verified data for {parsed_msgs[-1][1][:45].strip()}"
+                missing_pieces = [{
+                    "id": "mp1",
+                    "description": missing_desc,
+                    "action": "request",
+                    "actionLabel": "Request data"
+                }]
+
+                action_cues = ("let's", "lets", "will", "need to", "should", "plan", "todo", "review", "schedule")
+                action_msgs = [m for _, m in parsed_msgs if any(c in m.lower() for c in action_cues)]
+                next_steps = [m[:80].strip() for m in action_msgs[:3]]
+                if not next_steps:
+                    next_steps = [f"Synthesize decisions on {parsed_msgs[-1][1][:50].strip()}", "Align on next milestones"]
+
+                insights = [
                     {
                         "insight_id": "ins-1",
                         "type": "consensus",
-                        "text": "Team agrees retention drop is the primary issue to solve.",
-                        "confidence": 0.95,
-                        "supporting_contribution_ids": ["c1", "c3"]
+                        "text": f"Core deliberation focus: {parsed_msgs[0][1][:70]}",
+                        "confidence": 0.9,
+                        "supporting_contribution_ids": []
+                    },
+                    {
+                        "insight_id": "ins-2",
+                        "type": "debate",
+                        "text": f"Differing perspectives raised between {authors[0]} and {authors[-1] if len(authors) > 1 else 'team'}",
+                        "confidence": 0.85,
+                        "supporting_contribution_ids": []
                     }
-                ],
-                "next_steps": ["Review onboarding funnel drop-offs"]
-            })
+                ]
+
+                return json.dumps({
+                    "summary": summary,
+                    "disagreements": disagreements,
+                    "missing_pieces": missing_pieces,
+                    "insights": insights,
+                    "next_steps": next_steps
+                })
+            else:
+                return json.dumps({
+                    "summary": "Team session in progress. Deliberation insights will dynamically populate as participants contribute.",
+                    "disagreements": [],
+                    "missing_pieces": [],
+                    "insights": [],
+                    "next_steps": ["Begin sharing viewpoints and questions to synthesize live intelligence"]
+                })
         elif schema:
             # Generic valid JSON object for arbitrary test schemas
             try:

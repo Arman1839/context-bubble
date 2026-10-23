@@ -1,22 +1,27 @@
 "use client";
 
-import React, { useState, Suspense } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { joinBubble, getBubble } from "@/lib/api";
 import { useFirebaseAuth } from "@/lib/auth";
 import { AuthModal } from "@/components/auth/AuthModal";
+import { AvatarPicker } from "@/components/participant/AvatarPicker";
+import { getAvatarUrl, getSavedAvatarProfile } from "@/lib/avatar-profile";
+import { AmbientBubbles } from "@/components/layout/AmbientBubbles";
 
 function JoinBubbleForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading: authLoading, signOut } = useFirebaseAuth();
+  const { user, loading: authLoading } = useFirebaseAuth();
 
   const codeParam = searchParams.get("code") || searchParams.get("id") || "";
   const [code, setCode] = useState(codeParam);
   const [prevCodeParam, setPrevCodeParam] = useState(codeParam);
   // localUser bridges the gap between onSuccess callback and useFirebaseAuth state update
   const [localUser, setLocalUser] = useState<typeof user | null>(null);
+  const [joinName, setJoinName] = useState("");
+  const [joinNameEdited, setJoinNameEdited] = useState(false);
 
   if (codeParam !== prevCodeParam) {
     setPrevCodeParam(codeParam);
@@ -25,6 +30,10 @@ function JoinBubbleForm() {
 
   // Effective user: whichever is available first
   const effectiveUser = user || localUser;
+
+  useEffect(() => {
+    if (!joinNameEdited && effectiveUser?.displayName) setJoinName(effectiveUser.displayName);
+  }, [effectiveUser?.displayName, joinNameEdited]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,33 +62,35 @@ function JoinBubbleForm() {
 
     try {
       // 1. Verify bubble exists on the backend API
-      let bubbleTitle = "";
-      try {
-        const bubbleData = await getBubble(cleanedId);
-        bubbleTitle = bubbleData.title;
+      const bubbleData = await getBubble(cleanedId);
+      const bubbleTitle = bubbleData.title;
+      const actualBubbleId = bubbleData.id;
 
-        // 2. Join the bubble transactionally on the backend
-        await joinBubble(cleanedId, {
-          display_name: effectiveUser?.displayName || "Participant",
-          avatar_url:
-            effectiveUser?.photoURL ||
-            `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(
-              effectiveUser?.displayName || "Participant"
-            )}&backgroundColor=ffd5dc`,
-        });
-      } catch (backendErr: any) {
-        console.warn("Backend join validation notice:", backendErr);
-        if (backendErr?.message?.includes("404") || backendErr?.message?.includes("not found")) {
-          throw new Error(`Bubble "${cleanedId}" was not found. Please check the invite code.`);
-        }
-      }
+      // 2. Join the bubble transactionally on the backend. A rejected join must
+      // stay on this page so removal and stale invite messages are visible.
+      await joinBubble(actualBubbleId, {
+        display_name: joinName.trim() || effectiveUser?.displayName || "Participant",
+        join_code: cleanedId,
+        avatar_url: effectiveUser && getSavedAvatarProfile(effectiveUser.uid).kind === "human"
+          ? getAvatarUrl(effectiveUser.uid, joinName.trim() || effectiveUser.displayName || "Participant", getSavedAvatarProfile(effectiveUser.uid).style)
+          : undefined,
+        avatar_animal: effectiveUser && getSavedAvatarProfile(effectiveUser.uid).kind === "animal"
+          ? getSavedAvatarProfile(effectiveUser.uid).animal
+          : undefined,
+      });
 
       const sp = new URLSearchParams({
-        user: effectiveUser?.displayName || "Participant",
+        user: joinName.trim() || effectiveUser?.displayName || "Participant",
+        join_code: cleanedId,
         ...(bubbleTitle ? { title: bubbleTitle } : {}),
       });
 
-      router.push(`/bubble/${cleanedId}?${sp.toString()}`);
+      const targetUrl = `/bubble/${actualBubbleId}?${sp.toString()}`;
+      if (typeof window !== "undefined") {
+        window.location.assign(targetUrl);
+      } else {
+        router.push(targetUrl);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to join bubble.");
     } finally {
@@ -131,32 +142,14 @@ function JoinBubbleForm() {
         </p>
       </div>
 
-      {/* Authenticated Participant Pill */}
-      <div className="rounded-xl border border-white/10 bg-[#161d2e] p-3 mb-5 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={
-              effectiveUser!.photoURL ||
-              `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(
-                effectiveUser!.displayName || "Participant"
-              )}&backgroundColor=ffd5dc`
-            }
-            alt={effectiveUser!.displayName || "User"}
-            className="w-8 h-8 rounded-full border border-white/10"
-          />
-          <div>
-            <span className="text-xs text-slate-400 block">Joining as</span>
-            <span className="text-sm font-semibold text-white">{effectiveUser!.displayName}</span>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={signOut}
-          className="text-xs text-slate-400 hover:text-rose-400 px-2 py-1 rounded hover:bg-white/5 transition-colors"
-        >
-          Switch user
-        </button>
+      <div className="mb-5 flex flex-col gap-2 rounded-xl border border-white/10 bg-[#161d2e] p-4">
+        <label htmlFor="join-display-name" className="text-xs font-semibold text-slate-200">Name in this Bubble</label>
+        <input id="join-display-name" type="text" required maxLength={50} value={joinName} onChange={(e) => { setJoinName(e.target.value); setJoinNameEdited(true); }} placeholder="Your name in this Bubble" className="rounded-xl border border-white/10 bg-[#0f1525] px-4 py-2.5 text-sm text-slate-200 placeholder-slate-500 focus:border-violet-500 focus:outline-none" />
+        <p className="text-[11px] text-slate-500">Defaults to your account name. You can change it for this Bubble.</p>
+      </div>
+
+      <div className="mb-5">
+        <AvatarPicker uid={effectiveUser?.uid} name={effectiveUser?.displayName || "Participant"} />
       </div>
 
       {error && (
@@ -217,9 +210,10 @@ function JoinBubbleForm() {
 
 export default function JoinBubblePage() {
   return (
-    <div className="min-h-screen bg-[#0d0f1a] text-slate-100 flex flex-col selection:bg-violet-500/30">
+    <div className="relative isolate min-h-screen overflow-hidden bg-[#0d0f1a] text-slate-100 flex flex-col selection:bg-violet-500/30">
+      <AmbientBubbles />
       {/* Header */}
-      <header className="border-b border-white/10 bg-[#111827]/80 backdrop-blur-md px-5 py-3.5">
+      <header className="relative z-10 border-b border-white/10 bg-[#111827]/80 backdrop-blur-md px-5 py-3.5">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md group-hover:scale-105 transition-transform">
@@ -237,7 +231,7 @@ export default function JoinBubblePage() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-lg w-full mx-auto px-5 py-12 sm:py-16">
+      <main className="relative z-10 flex-1 max-w-lg w-full mx-auto px-5 py-12 sm:py-16">
         <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-[#0f1525] p-8 h-80 animate-pulse" />}>
           <JoinBubbleForm />
         </Suspense>

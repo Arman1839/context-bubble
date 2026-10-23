@@ -22,6 +22,59 @@ button:not(:disabled) {
   cursor: pointer;
 }
 
+.ambient-bubble {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(196, 181, 253, 0.24);
+  border-radius: 9999px;
+  background: radial-gradient(circle at 32% 25%, rgba(255, 255, 255, 0.18), rgba(129, 95, 220, 0.1) 46%, rgba(31, 41, 70, 0.32));
+  box-shadow: inset -7px -9px 18px rgba(7, 10, 24, 0.25), inset 4px 5px 12px rgba(255, 255, 255, 0.06), 0 0 32px rgba(124, 87, 220, 0.09);
+  backdrop-filter: blur(2px);
+  font-size: clamp(16px, 2.1vw, 27px);
+  opacity: 0.48;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.ambient-bubble--1 { left: 5%; top: 19%; width: 64px; height: 64px; animation: ambient-drift-a 17s infinite; }
+.ambient-bubble--2 { left: 79%; top: 15%; width: 76px; height: 76px; animation: ambient-drift-b 21s infinite; }
+.ambient-bubble--3 { left: 22%; top: 49%; width: 48px; height: 48px; animation: ambient-drift-c 15s infinite; }
+.ambient-bubble--4 { left: 91%; top: 44%; width: 58px; height: 58px; animation: ambient-drift-a 19s infinite reverse; }
+.ambient-bubble--5 { left: 48%; top: 11%; width: 42px; height: 42px; animation: ambient-drift-b 14s infinite reverse; }
+.ambient-bubble--6 { left: 64%; top: 68%; width: 68px; height: 68px; animation: ambient-drift-c 23s infinite; }
+.ambient-bubble--7 { left: 8%; top: 77%; width: 52px; height: 52px; animation: ambient-drift-b 18s infinite; }
+.ambient-bubble--8 { left: 86%; top: 81%; width: 44px; height: 44px; animation: ambient-drift-c 16s infinite reverse; }
+.ambient-bubble--9 { left: 36%; top: 88%; width: 60px; height: 60px; animation: ambient-drift-a 24s infinite; }
+.ambient-bubble--10 { left: 56%; top: 34%; width: 46px; height: 46px; animation: ambient-drift-b 20s infinite; }
+.ambient-bubble--11 { left: 30%; top: 23%; width: 42px; height: 42px; animation: ambient-drift-c 17s infinite; }
+.ambient-bubble--12 { left: 73%; top: 91%; width: 56px; height: 56px; animation: ambient-drift-a 22s infinite reverse; }
+.ambient-bubble--13 { left: 15%; top: 36%; width: 38px; height: 38px; animation: ambient-drift-b 16s infinite reverse; }
+.ambient-bubble--14 { left: 94%; top: 68%; width: 42px; height: 42px; animation: ambient-drift-c 19s infinite; }
+
+@keyframes ambient-drift-a {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  35% { transform: translate3d(28px, -34px, 0) rotate(8deg); }
+  70% { transform: translate3d(-18px, -68px, 0) rotate(-5deg); }
+}
+
+@keyframes ambient-drift-b {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  40% { transform: translate3d(-34px, 27px, 0) rotate(-9deg); }
+  75% { transform: translate3d(22px, 56px, 0) rotate(6deg); }
+}
+
+@keyframes ambient-drift-c {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  30% { transform: translate3d(24px, 31px, 0) rotate(7deg); }
+  68% { transform: translate3d(-29px, -26px, 0) rotate(-8deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-bubble { animation: none; }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

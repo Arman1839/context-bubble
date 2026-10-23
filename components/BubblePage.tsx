@@ -9,19 +9,38 @@ import { LiveIntelligencePanel } from "@/components/intelligence/LiveIntelligenc
 import { ManageBubblePanel } from "@/components/host/ManageBubblePanel";
 import { useFirebaseAuth } from "@/lib/auth";
 import { subscribeToBubbleMessages, sendMessageToFirestore } from "@/lib/messages";
-import { getBubble, getKnowledgeGraph, subscribeToBubbleStream, getPopStatus, joinBubble, getBriefing, updatePresence, getActivePresence, extendBubble } from "@/lib/api";
+import { getBubble, getKnowledgeGraph, subscribeToBubbleStream, getPopStatus, joinBubble, getBriefing, updatePresence, getActivePresence, extendBubble, leaveBubble, removeBubbleParticipant, updateAnonymousAvailability } from "@/lib/api";
+import { getAvatarUrl, getSavedAvatarProfile } from "@/lib/avatar-profile";
 import { AuthModal } from "@/components/auth/AuthModal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface Props {
   initialBubble: Bubble;
   initialRole?: Role;
   initialUserName?: string;
+  joinCode?: string;
   readOnly?: boolean;
 }
 
-export function BubblePage({ initialBubble, initialRole, initialUserName, readOnly = false }: Props) {
+function mergeIntelligence(previous: Bubble["intelligence"], incoming: Partial<Bubble["intelligence"]>, allowEmptyLists = false) {
+  const keepOrReplace = <T,>(oldItems: T[], nextItems: T[] | undefined) =>
+    Array.isArray(nextItems) && (allowEmptyLists || nextItems.length > 0) ? nextItems : oldItems;
+  const missingPiecesIncoming = incoming.missingPieces ?? (incoming as any).missing_pieces;
+  const nextStepsIncoming = incoming.nextSteps ?? (incoming as Partial<Bubble["intelligence"]> & { next_steps?: string[] }).next_steps;
+  return {
+    ...previous,
+    ...incoming,
+    summary: typeof incoming.summary === "string" && incoming.summary.trim() ? incoming.summary : previous.summary,
+    disagreements: keepOrReplace(previous.disagreements, incoming.disagreements),
+    missingPieces: keepOrReplace(previous.missingPieces, missingPiecesIncoming),
+    nextSteps: keepOrReplace(previous.nextSteps, nextStepsIncoming),
+    raw_insights: keepOrReplace(previous.raw_insights || [], incoming.raw_insights),
+  };
+}
+
+export function BubblePage({ initialBubble, initialRole, initialUserName, joinCode, readOnly = false }: Props) {
   // Firebase Auth state
-  const { user, loading: authLoading, signOut } = useFirebaseAuth();
+  const { user, loading: authLoading } = useFirebaseAuth();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const router = useRouter();
 
@@ -29,6 +48,7 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
   const [bubble, setBubble] = useState<Bubble>(() => {
     return {
       ...initialBubble,
+      contributions: initialBubble.contributions.filter((contribution) => contribution.authorId !== "bubble-ai" && contribution.authorName !== "Bubble AI"),
       expiresAt: initialBubble.expiresAt,
       popState: initialBubble.popState || "ACTIVE",
     };
@@ -42,7 +62,11 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
   });
 
   const [isManageOpen, setIsManageOpen] = useState(false);
+  const [showLeaveConfirmation, setShowLeaveConfirmation] = useState(false);
+  const [isLeavingBubble, setIsLeavingBubble] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const [newCount, setNewCount] = useState(0);
+  const [anonymousPreference, setAnonymousPreference] = useState(false);
 
   // Live SSE stream state
   const [streamingToken, setStreamingToken] = useState<string>("");
@@ -50,10 +74,6 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
   const [knowledgeGraph, setKnowledgeGraph] = useState<KnowledgeGraph | null>(null);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
 
-  // AI participant response — shown in the intelligence panel, never in the chat feed
-  const [aiResponse, setAiResponse] = useState<string>("");
-  const [isAIResponding, setIsAIResponding] = useState<boolean>(false);
-  const [aiError, setAiError] = useState<string>("");
 
   // Popped / Executive Briefing Modal State
   const [showBriefingModal, setShowBriefingModal] = useState<boolean>(false);
@@ -69,6 +89,14 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
   const [graceSeconds, setGraceSeconds] = useState<number | null>(null);
   const [isExtendingExpiry, setIsExtendingExpiry] = useState(false);
   const [expiryError, setExpiryError] = useState("");
+  const [removedByHost, setRemovedByHost] = useState(false);
+  const [memberNotice, setMemberNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!memberNotice) return;
+    const timer = window.setTimeout(() => setMemberNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [memberNotice]);
 
   // 1. Fetch live Bubble metadata from backend & auto-register participant
   useEffect(() => {
@@ -77,11 +105,33 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
 
     // If user is authenticated, ensure they are registered in the backend participant roster
     if (!readOnly && user && user.displayName) {
-      joinBubble(bubble.id, {
-        display_name: user.displayName,
-        avatar_url: user.photoURL || undefined,
+      const avatarProfile = getSavedAvatarProfile(user.uid);
+      const meetingDisplayName = initialUserName?.trim() || user.displayName;
+      const ensureMembership = initialRole === "host" && meetingDisplayName !== user.displayName
+        ? Promise.resolve(null)
+        : joinBubble(bubble.id, {
+          display_name: meetingDisplayName,
+          join_code: joinCode,
+          avatar_url: avatarProfile.kind === "human" ? getAvatarUrl(user.uid, meetingDisplayName, avatarProfile.style) : undefined,
+          avatar_animal: avatarProfile.kind === "animal" ? avatarProfile.animal : undefined,
+        });
+      ensureMembership.then((member) => {
+        if (!member) return;
+        if (isMounted) {
+          setBubble((prev) => {
+            const members = prev.members.some((item) => item.id === member.id)
+              ? prev.members.map((item) => item.id === member.id ? { ...item, ...member, isOnline: true } : item)
+              : [...prev.members, { ...member, isOnline: true }];
+            members.sort((a, b) => a.id.localeCompare(b.id));
+            return { ...prev, members, memberCount: new Set(members.filter((item) => item.isOnline !== false).map((item) => item.id)).size };
+          });
+        }
+        return updatePresence(bubble.id, false, "online");
       }).catch((err) => {
         console.debug("Participant join check notice:", err);
+        if (String(err?.message || "").toLowerCase().includes("removed by the host")) {
+          setRemovedByHost(true);
+        }
       });
     }
 
@@ -91,10 +141,17 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         setBubble((prev) => ({
           ...prev,
           title: data.title || prev.title,
+          joinCode: data.join_code || prev.joinCode,
           isLive: data.is_live ?? prev.isLive,
           expiresAt: data.expires_at ? new Date(data.expires_at) : prev.expiresAt,
-          memberCount: data.member_count || prev.memberCount,
-          members: data.members && data.members.length > 0 ? (data.members as any) : prev.members,
+          memberCount: data.member_count ?? prev.memberCount,
+          members: data.members && data.members.length > 0
+            ? (data.members as any[]).map((member) => {
+              if (member.id !== user?.uid) return member;
+              const current = prev.members.find((item) => item.id === member.id);
+              return current?.avatar ? { ...member, avatar: current.avatar, avatar_animal: current.avatar_animal } : member;
+            }).sort((a, b) => a.id.localeCompare(b.id))
+            : prev.members,
           retentionPolicy: data.retention_policy || prev.retentionPolicy,
           anonymousModeEnabled: data.anonymous_mode_enabled ?? prev.anonymousModeEnabled,
           triggerMode: data.trigger_mode || prev.triggerMode,
@@ -103,7 +160,7 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
           expiryDecisionDeadline: data.expiry_decision_deadline ? new Date(data.expiry_decision_deadline) : undefined,
           viewUntil: data.view_until ? new Date(data.view_until) : undefined,
           intelligence: data.intelligence
-            ? { ...prev.intelligence, ...data.intelligence }
+            ? mergeIntelligence(prev.intelligence, data.intelligence)
             : prev.intelligence,
         }));
         if (data.retention_policy) setRetentionPolicy(data.retention_policy);
@@ -124,8 +181,8 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
     // Fetch initial knowledge graph
     getKnowledgeGraph(bubble.id)
       .then((g) => {
-        if (isMounted && g && g.nodes) {
-          setKnowledgeGraph(g);
+        if (isMounted && g && g.nodes?.length) {
+          setKnowledgeGraph((previous) => !previous || g.version >= previous.version ? g : previous);
         }
       })
       .catch(() => {});
@@ -133,7 +190,16 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
     return () => {
       isMounted = false;
     };
-  }, [bubble.id, user?.uid, user?.displayName, readOnly]);
+  }, [bubble.id, user?.uid, user?.displayName, initialUserName, joinCode, readOnly]);
+
+  useEffect(() => {
+    if (!bubble.id || !user?.uid) {
+      setAnonymousPreference(false);
+      return;
+    }
+    const key = `context_bubble_anonymous:${bubble.id}:${user.uid}`;
+    setAnonymousPreference(window.localStorage.getItem(key) === "true");
+  }, [bubble.id, user?.uid, bubble.anonymousModeEnabled]);
 
   useEffect(() => {
     if (bubble.popState !== "EXPIRY_PENDING" || !bubble.expiryDecisionDeadline) return;
@@ -178,14 +244,24 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         if (!isMounted) return;
 
         setBubble((prev) => {
-          const knownMembers = new Map(prev.members.map((member) => [member.id, member]));
-          const members = active.map((presence) => {
-            const known = knownMembers.get(presence.user_id);
-            return known
-              ? { ...known, name: presence.display_name }
-              : { id: presence.user_id, name: presence.display_name, role: "participant" as const };
+          const activeById = new Map(active.map((presence) => [presence.user_id, presence]));
+          const membersById = new Map(prev.members.map((member) => [member.id, member]));
+          for (const presence of active) {
+            const old = membersById.get(presence.user_id);
+            membersById.set(presence.user_id, {
+              ...(old || { id: presence.user_id, role: "participant" as const }),
+              name: presence.display_name,
+              isOnline: true,
+            });
+          }
+          const members = [...membersById.values()]
+            .map((member) => ({ ...member, isOnline: activeById.has(member.id) }))
+            .sort((a, b) => a.id.localeCompare(b.id));
+          const unchanged = prev.memberCount === activeById.size && members.length === prev.members.length && members.every((member, index) => {
+            const old = prev.members[index];
+            return old?.id === member.id && old.name === member.name && old.avatar === member.avatar && old.avatar_animal === member.avatar_animal && old.isOnline === member.isOnline;
           });
-          return { ...prev, members, memberCount: members.length };
+          return unchanged ? prev : { ...prev, members, memberCount: activeById.size };
         });
       } catch (err) {
         console.debug("Presence refresh notice:", err);
@@ -207,21 +283,22 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
       window.removeEventListener("pageshow", refreshPresence);
       markOffline();
     };
-  }, [bubble.id, bubble.popState, readOnly]);
+  }, [bubble.id, readOnly]);
 
   // SSE provides immediate updates; refresh the persisted snapshot periodically
   // so a dropped event or temporary stream disconnect cannot leave the panel stale.
   useEffect(() => {
-    if (!bubble.id || bubble.popState !== "ACTIVE") return;
+    if (!bubble.id || bubble.popState !== "ACTIVE" || isSynthesizing) return;
     let isMounted = true;
 
     const refreshIntelligence = async () => {
       try {
         const data = await getBubble(bubble.id);
-        if (!isMounted || !data.intelligence) return;
+        const intelligence = data.intelligence;
+        if (!isMounted || !intelligence || isSynthesizing) return;
         setBubble((prev) => ({
           ...prev,
-          intelligence: { ...prev.intelligence, ...data.intelligence },
+          intelligence: mergeIntelligence(prev.intelligence, intelligence),
         }));
       } catch (err) {
         console.debug("Intelligence refresh status:", err);
@@ -233,7 +310,7 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
       isMounted = false;
       window.clearInterval(interval);
     };
-  }, [bubble.id, bubble.popState]);
+  }, [bubble.id, bubble.popState, isSynthesizing]);
 
   // When bubble is popped: fetch real briefing, show modal briefly, then redirect
   const loadBriefingModal = useCallback(async () => {
@@ -329,75 +406,83 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         setBubble((prev) => {
           const exists = prev.members.some((m) => m.id === member.id);
           const updatedMembers = exists
-            ? prev.members.map((m) => (m.id === member.id ? { ...m, ...member } : m))
-            : [...prev.members, member];
+            ? prev.members.map((m) => (m.id === member.id ? { ...m, ...member, isOnline: true } : m))
+            : [...prev.members, { ...member, isOnline: true }];
+          updatedMembers.sort((a, b) => a.id.localeCompare(b.id));
           return {
             ...prev,
-            memberCount: updatedMembers.length,
+            memberCount: new Set(updatedMembers.filter((m) => m.isOnline !== false).map((m) => m.id)).size,
             members: updatedMembers,
           };
         });
+      },
+      onMemberLeft: ({ user_id, display_name }) => {
+        setBubble((prev) => {
+          const members = prev.members.filter((member) => member.id !== user_id);
+          return { ...prev, members, memberCount: members.filter((member) => member.isOnline !== false).length };
+        });
+        setMemberNotice(`${display_name} left the Bubble.`);
+      },
+      onMemberRemoved: ({ user_id, removed_by_host }) => {
+        setBubble((prev) => {
+          const members = prev.members.filter((member) => member.id !== user_id);
+          return { ...prev, members, memberCount: members.filter((member) => member.isOnline !== false).length };
+        });
+        if (user_id === user?.uid && removed_by_host) setRemovedByHost(true);
+      },
+      onAnonymousModeUpdated: ({ enabled }) => {
+        setBubble((prev) => ({ ...prev, anonymousModeEnabled: enabled }));
+        if (!enabled && user?.uid) {
+          window.localStorage.removeItem(`context_bubble_anonymous:${bubble.id}:${user.uid}`);
+          setAnonymousPreference(false);
+        }
       },
       onToken: (token) => {
         setIsSynthesizing(true);
         setStreamingToken(token);
       },
-      onAIToken: (token) => {
-        setIsAIResponding(true);
-        if (!token) setAiError("");
-        setAiResponse((prev) => token ? prev + token : "");
-      },
-      onAIComplete: (text) => {
-        setIsAIResponding(false);
-        setAiResponse(text);
-        setAiError("");
-      },
-      onAIError: (message) => {
-        setIsAIResponding(false);
-        setAiError(message);
-      },
+      onAIToken: () => {},
+      onAIComplete: () => {},
+      onAIError: () => {},
       onComplete: (intel) => {
         setIsSynthesizing(false);
         setStreamingToken("");
-        if (intel && intel.summary) {
+        if (intel) {
           setBubble((prev) => ({
             ...prev,
-            intelligence: { ...prev.intelligence, ...intel },
+            intelligence: mergeIntelligence(prev.intelligence, intel),
           }));
         }
       },
       onDelta: (delta: any) => {
         setIsSynthesizing(false);
         setStreamingToken("");
-        if (delta && delta.summary) {
+        if (delta) {
           setBubble((prev) => ({
             ...prev,
-            intelligence: {
-              ...prev.intelligence,
-              summary: delta.summary,
-              disagreements: delta.disagreements || prev.intelligence.disagreements,
-              missingPieces: delta.missingPieces || prev.intelligence.missingPieces,
-              nextSteps: delta.next_steps || delta.nextSteps || prev.intelligence.nextSteps,
-            },
+            intelligence: mergeIntelligence(prev.intelligence, delta),
           }));
         }
       },
       onGraph: (graph) => {
-        if (graph && graph.nodes) setKnowledgeGraph(graph);
+        if (graph && Array.isArray(graph.nodes) && graph.nodes.length) {
+          setKnowledgeGraph((previous) => !previous || graph.version >= previous.version ? graph : previous);
+        }
       },
       onPresence: (pres) => {
         setBubble((prev) => {
           const byId = new Map(prev.members.map((member) => [member.id, member]));
           if (pres.status === "offline") {
-            byId.delete(pres.user_id);
+            const existing = byId.get(pres.user_id);
+            if (existing) byId.set(pres.user_id, { ...existing, isOnline: false });
           } else {
             const existing = byId.get(pres.user_id);
             byId.set(pres.user_id, existing
-              ? { ...existing, name: pres.display_name }
-              : { id: pres.user_id, name: pres.display_name, role: "participant" });
+              ? { ...existing, name: pres.display_name, isOnline: true }
+              : { id: pres.user_id, name: pres.display_name, role: "participant", isOnline: true });
           }
-          const members = [...byId.values()];
-          return { ...prev, members, memberCount: members.length };
+          const members = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+          return { ...prev, members, memberCount: new Set(members.filter((member) => member.isOnline !== false).map((member) => member.id)).size };
         });
         if (pres.is_typing) {
           setTypingUsers((prev) => (prev.includes(pres.display_name) ? prev : [...prev, pres.display_name]));
@@ -417,7 +502,7 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
     });
 
     return () => { unsubscribeSSE(); };
-  }, [bubble.id, loadBriefingModal, readOnly, role]);
+  }, [bubble.id, loadBriefingModal, readOnly, role, user?.uid, router]);
 
   // 3. Subscribe to messages — backend is the single source of truth
   useEffect(() => {
@@ -427,6 +512,11 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
       bubble.id,
       (backendMsgs) => {
         setBubble((prev) => {
+          // A live room cannot intentionally lose its entire chat feed. Treat an
+          // empty polling snapshot as transient while the bubble is still active.
+          if (backendMsgs.length === 0 && prev.contributions.length > 0 && prev.popState === "ACTIVE") {
+            return prev;
+          }
           const now = Date.now();
           const confirmedSignatures = new Set(
             backendMsgs.map((m) => `${m.authorId || m.authorName}:::${(m.text || "").trim()}`)
@@ -445,10 +535,11 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
             return true;
           });
 
-          // Strictly deduplicate by id
+          // Strictly deduplicate by id and filter out any AI messages from the deliberation feed
           const seen = new Set<string>();
           const deduped: Contribution[] = [];
           for (const item of [...backendMsgs, ...stillPending]) {
+            if (item.authorId === "bubble-ai" || item.authorName === "Bubble AI") continue;
             if (!seen.has(item.id)) {
               seen.add(item.id);
               deduped.push(item);
@@ -484,15 +575,14 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         return;
       }
 
-      const authorDisplayName = bubble.anonymousModeEnabled
+      const authorDisplayName = anonymousPreference
         ? "Anonymous"
-        : user.displayName || initialUserName || "You";
+        : initialUserName || user.displayName || "You";
 
       const authorUid = user.uid;
-      const authorAvatar = bubble.anonymousModeEnabled
+      const authorAvatar = anonymousPreference
         ? undefined
-        : user.photoURL ||
-          `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(authorDisplayName)}&backgroundColor=ffd5dc`;
+        : getAvatarUrl(user.uid, authorDisplayName, getSavedAvatarProfile(user.uid).style);
 
       // 1. Optimistic UI update — append to end (newest at bottom, like WhatsApp)
       const newContribution: Contribution = {
@@ -500,7 +590,10 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         authorId: authorUid,
         authorName: authorDisplayName,
         authorAvatar,
-        isAnonymous: bubble.anonymousModeEnabled,
+        isAnonymous: anonymousPreference,
+        authorAnimal: anonymousPreference || getSavedAvatarProfile(user.uid).kind !== "animal"
+          ? undefined
+          : getSavedAvatarProfile(user.uid).animal,
         text,
         attachments,
         timestamp: new Date(),
@@ -518,31 +611,73 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         authorId: authorUid,
         authorName: authorDisplayName,
         text,
-        isAnonymous: bubble.anonymousModeEnabled,
+        isAnonymous: anonymousPreference,
         attachments,
       }).catch((err) => {
         console.warn("Failed to write message:", err);
       });
     },
-    [bubble.id, bubble.anonymousModeEnabled, bubble.isLive, bubble.popState, initialUserName, user]
+    [bubble.id, anonymousPreference, bubble.isLive, bubble.popState, initialUserName, user]
   );
 
   // Refresh knowledge graph
   const handleRefreshGraph = useCallback(() => {
     getKnowledgeGraph(bubble.id)
       .then((g) => {
-        if (g && g.nodes) setKnowledgeGraph(g);
+        if (g && g.nodes?.length) setKnowledgeGraph((previous) => !previous || g.version >= previous.version ? g : previous);
       })
       .catch(() => {});
   }, [bubble.id]);
 
-  // Local: toggle anonymous mode
-  const handleToggleAnonymous = useCallback(() => {
-    setBubble((prev) => ({
-      ...prev,
-      anonymousModeEnabled: !prev.anonymousModeEnabled,
-    }));
-  }, []);
+  const handleToggleAnonymousPreference = useCallback(() => {
+    if (!user?.uid || !bubble.anonymousModeEnabled) return;
+    setAnonymousPreference((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(`context_bubble_anonymous:${bubble.id}:${user.uid}`, String(next));
+      return next;
+    });
+  }, [bubble.id, bubble.anonymousModeEnabled, user?.uid]);
+
+  const handleToggleAnonymousAvailability = useCallback(async () => {
+    const enabled = !bubble.anonymousModeEnabled;
+    try {
+      await updateAnonymousAvailability(bubble.id, enabled);
+      setBubble((prev) => ({ ...prev, anonymousModeEnabled: enabled }));
+      if (!enabled) {
+        setAnonymousPreference(false);
+        if (user?.uid) window.localStorage.removeItem(`context_bubble_anonymous:${bubble.id}:${user.uid}`);
+      }
+    } catch (err) {
+      console.warn("Could not update anonymous availability:", err);
+    }
+  }, [bubble.id, bubble.anonymousModeEnabled, user?.uid]);
+
+  const handleLeaveBubble = useCallback(async () => {
+    setIsLeavingBubble(true);
+    setLeaveError(null);
+    try {
+      await updatePresence(bubble.id, false, "offline").catch(() => {});
+      await leaveBubble(bubble.id);
+      router.replace("/");
+    } catch (err) {
+      setLeaveError(err instanceof Error ? err.message : "Could not leave this bubble. Please try again.");
+    } finally {
+      setIsLeavingBubble(false);
+    }
+  }, [bubble.id, router]);
+
+  const handleRemoveParticipant = useCallback(async (participantId: string) => {
+    const result = await removeBubbleParticipant(bubble.id, participantId);
+    setBubble((prev) => {
+      const removedWasOnline = prev.members.some((member) => member.id === participantId && member.isOnline !== false);
+      return {
+        ...prev,
+        joinCode: result.join_code,
+        members: prev.members.filter((member) => member.id !== participantId),
+        memberCount: Math.max(0, prev.memberCount - (removedWasOnline ? 1 : 0)),
+      };
+    });
+  }, [bubble.id]);
 
   // Copy Executive Briefing Markdown
   const handleCopyBriefingMarkdown = () => {
@@ -609,10 +744,10 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
       color = "amber";
     }
 
-    const colorClasses: Record<string, { bg: string; border: string; text: string; button: string }> = {
-      amber: { bg: "bg-amber-950/80", border: "border-amber-500/40", text: "text-amber-200", button: "bg-amber-600 hover:bg-amber-500" },
-      blue:  { bg: "bg-blue-950/80",  border: "border-blue-500/40",  text: "text-blue-200",  button: "bg-blue-600 hover:bg-blue-500" },
-      rose:  { bg: "bg-rose-950/80",  border: "border-rose-500/40",  text: "text-rose-200",  button: "bg-rose-600 hover:bg-rose-500" },
+    const colorClasses: Record<string, { bg: string; border: string; text: string }> = {
+      amber: { bg: "bg-amber-950/80", border: "border-amber-500/40", text: "text-amber-200" },
+      blue:  { bg: "bg-blue-950/80",  border: "border-blue-500/40",  text: "text-blue-200" },
+      rose:  { bg: "bg-rose-950/80",  border: "border-rose-500/40",  text: "text-rose-200" },
     };
     const c = colorClasses[color] || colorClasses.rose;
 
@@ -625,14 +760,6 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
             <span className="opacity-90 text-[11px]">{detail}</span>
           </div>
         </div>
-        {bubble.popState === "POPPED" && (
-          <button
-            onClick={() => router.push("/history")}
-            className={`px-3 py-1 rounded-lg ${c.button} text-white font-semibold transition-colors shrink-0 ml-3`}
-          >
-            Previous Bubbles
-          </button>
-        )}
       </div>
     );
   })();
@@ -643,12 +770,22 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         bubble={bubble}
         role={readOnly ? "participant" : role}
         onOpenManage={() => setIsManageOpen(true)}
-        currentUser={user}
-        onOpenAuthModal={() => setIsAuthModalOpen(true)}
-        onSignOut={signOut}
+        onLeave={role === "participant" && !readOnly ? () => { setLeaveError(null); setShowLeaveConfirmation(true); } : undefined}
         hideTimer={readOnly}
         readOnly={readOnly}
       />
+
+      {memberNotice && <div role="status" className="fixed left-1/2 top-16 z-50 -translate-x-1/2 rounded-xl border border-white/15 bg-[#111827] px-4 py-3 text-sm text-slate-100 shadow-xl">
+        <span aria-hidden="true" className="mr-2">👋</span>{memberNotice}
+      </div>}
+
+      {removedByHost && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/80 p-5 backdrop-blur-sm">
+        <section role="alertdialog" aria-modal="true" aria-labelledby="removed-title" className="w-full max-w-md rounded-2xl border border-rose-500/30 bg-[#111827] p-6 shadow-2xl">
+          <h2 id="removed-title" className="text-lg font-bold text-white">You were removed by the host</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-300">You no longer have access to this Bubble. Refreshing the page will not let you rejoin.</p>
+          <button type="button" onClick={() => router.replace("/")} className="mt-5 w-full rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-500">Return to home</button>
+        </section>
+      </div>}
 
       {/* Upfront Auth Gate if not signed in */}
       {!authLoading && (!user || !user.displayName) && (
@@ -665,8 +802,11 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
               // Register participant with backend
               joinBubble(bubble.id, {
                 display_name: signedInUser.displayName || "Participant",
+                join_code: joinCode,
                 avatar_url: signedInUser.photoURL || undefined,
-              }).catch(() => {});
+              }).catch((err) => {
+                if (String(err?.message || "").toLowerCase().includes("removed by the host")) setRemovedByHost(true);
+              });
             }
           }}
         />
@@ -710,12 +850,12 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
           <ContributionFeed
             bubbleId={bubble.id}
             userId={user?.uid || "guest"}
-            userName={user?.displayName || initialUserName || "Participant"}
+            userName={initialUserName || user?.displayName || "Participant"}
             contributions={bubble.contributions}
-            isAnonymous={bubble.anonymousModeEnabled}
+            isAnonymous={anonymousPreference}
             isLive={!readOnly && bubble.isLive && bubble.popState === "ACTIVE"}
             hideAttachments={retentionPolicy === "view-only"}
-            onToggleAnonymous={role === "host" ? handleToggleAnonymous : undefined}
+            onToggleAnonymous={bubble.anonymousModeEnabled ? handleToggleAnonymousPreference : undefined}
             newCount={newCount}
             typingUsers={typingUsers}
             onNewContribution={handleNewContribution}
@@ -728,11 +868,10 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
           <LiveIntelligencePanel
             intelligence={bubble.intelligence}
             knowledgeGraph={knowledgeGraph}
+            contributions={bubble.contributions}
+            bubbleTitle={bubble.title}
             streamingToken={streamingToken}
             isSynthesizing={isSynthesizing}
-            aiResponse={aiResponse}
-            isAIResponding={isAIResponding}
-            aiError={aiError}
             onRefreshGraph={handleRefreshGraph}
           />
         </div>
@@ -758,8 +897,9 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
         <ManageBubblePanel
           bubble={bubble}
           onClose={() => setIsManageOpen(false)}
-          onToggleAnonymous={handleToggleAnonymous}
+          onToggleAnonymous={handleToggleAnonymousAvailability}
           onBubbleUpdated={(updated) => setBubble((prev) => ({ ...prev, ...updated }))}
+          onRemoveParticipant={handleRemoveParticipant}
           onBubblePopped={(state) => {
             setBubble((prev) => ({ ...prev, popState: state, isLive: state === "ACTIVE" }));
             if (state === "POPPED") loadBriefingModal();
@@ -814,6 +954,36 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
                     <li key={i} className="flex items-start gap-2 text-xs text-slate-200 bg-[#161d2e] rounded-lg p-2.5 border border-white/5">
                       <span className="text-emerald-400 font-bold shrink-0">✓</span>
                       <span>{d}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Points of Consensus */}
+            {briefing?.consensus_points && briefing.consensus_points.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-cyan-300">Points of Consensus</h4>
+                <ul className="flex flex-col gap-1.5">
+                  {briefing.consensus_points.map((c, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-slate-200 bg-[#161d2e] rounded-lg p-2.5 border border-white/5">
+                      <span className="text-cyan-400 font-bold shrink-0">🤝</span>
+                      <span>{c}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Identified Blockers */}
+            {briefing?.blockers && briefing.blockers.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-rose-300">Identified Blockers</h4>
+                <ul className="flex flex-col gap-1.5">
+                  {briefing.blockers.map((b, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-slate-200 bg-rose-950/20 rounded-lg p-2.5 border border-rose-500/20">
+                      <span className="text-rose-400 font-bold shrink-0">⚠️</span>
+                      <span>{b}</span>
                     </li>
                   ))}
                 </ul>
@@ -878,6 +1048,31 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
               </div>
             )}
 
+            {/* Knowledge Graph Synthesis */}
+            {briefing?.graph_summary && (briefing.graph_summary.total_nodes > 0 || briefing.graph_summary.key_relationships.length > 0) && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
+                    Knowledge Graph Synthesis
+                  </h4>
+                  <span className="text-[11px] text-slate-400">
+                    {briefing.graph_summary.total_nodes} entities · {briefing.graph_summary.total_edges} connections
+                  </span>
+                </div>
+                {briefing.graph_summary.key_relationships.length > 0 && (
+                  <ul className="flex flex-col gap-1.5">
+                    {briefing.graph_summary.key_relationships.slice(0, 5).map((rel, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-slate-300 bg-indigo-950/20 rounded-lg p-2.5 border border-indigo-500/20">
+                        <span className="text-indigo-400 font-bold shrink-0">☍</span>
+                        <span>{rel}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-white/10">
               <span className="text-xs text-slate-500">
@@ -906,6 +1101,15 @@ export function BubblePage({ initialBubble, initialRole, initialUserName, readOn
           </div>
         </div>
       )}
+      {showLeaveConfirmation && <ConfirmDialog
+        title="Leave this bubble?"
+        description="You’ll leave the live discussion and won’t appear in its active participant list. You can rejoin later if the host hasn’t removed you."
+        confirmLabel="Leave bubble"
+        busy={isLeavingBubble}
+        error={leaveError}
+        onCancel={() => { setShowLeaveConfirmation(false); setLeaveError(null); }}
+        onConfirm={handleLeaveBubble}
+      />}
     </div>
   );
 }

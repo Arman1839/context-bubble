@@ -4,15 +4,12 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import type { Bubble, Role } from "@/types";
 import { formatExpiry } from "@/lib/sample-data";
-import type { AppUser } from "@/lib/auth";
 
 interface Props {
   bubble: Bubble;
   role: Role;
   onOpenManage: () => void;
-  currentUser?: AppUser | null;
-  onOpenAuthModal?: () => void;
-  onSignOut?: () => void;
+  onLeave?: () => void;
   hideTimer?: boolean;
   readOnly?: boolean;
 }
@@ -21,9 +18,7 @@ export function Header({
   bubble,
   role,
   onOpenManage,
-  currentUser,
-  onOpenAuthModal,
-  onSignOut,
+  onLeave,
   hideTimer = false,
   readOnly = false,
 }: Props) {
@@ -45,8 +40,6 @@ export function Header({
     return () => clearInterval(timer);
   }, [bubble.expiresAt]);
 
-  const userDisplayName =
-    currentUser?.displayName || (currentUser?.email ? currentUser.email.split("@")[0] : null);
 
   return (
     <header className="flex items-center gap-4 px-5 py-3 bg-[#111827] border-b border-white/10 shrink-0">
@@ -78,14 +71,21 @@ export function Header({
       {/* Members */}
       {!readOnly && <div className="flex items-center gap-2 shrink-0">
         <div className="flex -space-x-2">
-          {bubble.members.slice(0, 5).map((m) => (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              key={m.id}
-              src={m.avatar || `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(m.name)}&backgroundColor=b6e3f4`}
-              alt={m.name}
-              className="w-7 h-7 rounded-full border-2 border-[#111827] bg-slate-700"
-            />
+          {[...new Map(bubble.members.filter((member) => member.isOnline !== false).map((member) => [member.id, member])).values()].slice(0, 5).map((m) => (
+            <span key={m.id} className="relative h-7 w-7">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {m.avatar_animal ? (
+                <span title={m.name} className="grid h-7 w-7 place-items-center rounded-full border-2 border-[#111827] bg-slate-700 text-base" aria-label={`${m.name}'s animal avatar`}>{m.avatar_animal}</span>
+              ) : (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={m.avatar || `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(m.name)}&backgroundColor=b6e3f4`}
+                  alt={m.name}
+                  title={m.name}
+                  className="h-7 w-7 rounded-full border-2 border-[#111827] bg-slate-700"
+                />
+              )}
+            </span>
           ))}
           {bubble.memberCount > 5 && (
             <span className="w-7 h-7 rounded-full border-2 border-[#111827] bg-slate-600 flex items-center justify-center text-white text-[10px] font-bold">
@@ -110,17 +110,18 @@ export function Header({
         </div>
       )}
 
-      {/* Role-specific Host controls */}
-      <Link href="/history" className="cursor-pointer px-2.5 py-1.5 rounded-lg border border-white/10 text-slate-300 text-xs hover:bg-white/5 shrink-0">
-        Previous Bubbles
-      </Link>
-
       {role === "host" && (
         <button
           onClick={onOpenManage}
           className="ml-2 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 border border-violet-400/30 text-white text-xs font-medium transition-colors shrink-0 shadow-sm"
         >
           Manage Room
+        </button>
+      )}
+
+      {onLeave && (
+        <button type="button" onClick={onLeave} className="cursor-pointer rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:border-rose-500/40 hover:bg-rose-950/30 hover:text-rose-200 shrink-0">
+          Leave meeting
         </button>
       )}
 
@@ -135,46 +136,6 @@ export function Header({
         {role.toUpperCase()}
       </span>
 
-      {/* User Authentication Pill / Sign In Button (mounted-safe to prevent SSR hydration mismatch) */}
-      {mounted ? (
-        currentUser && userDisplayName ? (
-          <div className="flex items-center gap-2 bg-[#1e293b] border border-white/10 rounded-full pl-1.5 pr-2.5 py-1 shrink-0">
-            {currentUser.photoURL ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={currentUser.photoURL}
-                alt={userDisplayName}
-                className="w-6 h-6 rounded-full"
-              />
-            ) : (
-              <div className="w-6 h-6 rounded-full bg-violet-600/40 text-violet-300 font-bold text-[10px] flex items-center justify-center">
-                {userDisplayName.charAt(0).toUpperCase()}
-              </div>
-            )}
-            <span className="text-slate-200 text-xs font-medium max-w-[100px] truncate">
-              {userDisplayName}
-            </span>
-            {onSignOut && (
-              <button
-                onClick={onSignOut}
-                className="ml-1 text-[11px] text-slate-400 hover:text-rose-400 transition-colors"
-                title="Sign out / Switch user"
-              >
-                Sign out
-              </button>
-            )}
-          </div>
-        ) : onOpenAuthModal ? (
-          <button
-            onClick={onOpenAuthModal}
-            className="px-3.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shadow-md shadow-violet-900/30 transition-colors shrink-0 flex items-center gap-1.5"
-          >
-            <span>Sign In</span>
-          </button>
-        ) : null
-      ) : (
-        <div className="w-16 h-7" />
-      )}
     </header>
   );
 }

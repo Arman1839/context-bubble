@@ -21,16 +21,32 @@ class DisagreementSummary(BaseModel):
     unresolved_questions: List[str] = Field(default_factory=list)
 
 
-class ExecutiveBriefing(BaseModel):
-    bubble_id: str
-    bubble_title: str
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    executive_summary: str
+class GraphRelationshipSummary(BaseModel):
+    total_nodes: int = 0
+    total_edges: int = 0
+    key_relationships: List[str] = Field(default_factory=list)
+
+
+class ExecutiveBriefingExtraction(BaseModel):
+    executive_summary: str = ""
     decisions: List[str] = Field(default_factory=list)
     consensus_points: List[str] = Field(default_factory=list)
     disagreements: List[DisagreementSummary] = Field(default_factory=list)
     blockers: List[str] = Field(default_factory=list)
     action_items: List[ActionItem] = Field(default_factory=list)
+
+
+class ExecutiveBriefing(BaseModel):
+    bubble_id: str = ""
+    bubble_title: str = ""
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    executive_summary: str = ""
+    decisions: List[str] = Field(default_factory=list)
+    consensus_points: List[str] = Field(default_factory=list)
+    disagreements: List[DisagreementSummary] = Field(default_factory=list)
+    blockers: List[str] = Field(default_factory=list)
+    action_items: List[ActionItem] = Field(default_factory=list)
+    graph_summary: Optional[GraphRelationshipSummary] = None
     markdown_content: Optional[str] = None
 
 

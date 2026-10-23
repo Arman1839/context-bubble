@@ -214,7 +214,7 @@ class FileProcessingWorker:
 
     async def _extract_image_ocr(self, file_bytes: bytes, content_type: str, filename: str) -> str:
         client = getattr(self.llm, "_client", None)
-        model_name = getattr(self.llm, "_model_name", "gemini-3.5-flash")
+        model_name = getattr(self.llm, "_model_name", "gemini-3.5-flash-lite")
         if client and hasattr(client, "aio") and file_bytes:
             try:
                 from google.genai import types
@@ -278,7 +278,7 @@ class FileProcessingWorker:
 
         # Fallback: Gemini multimodal
         client = getattr(self.llm, "_client", None)
-        model_name = getattr(self.llm, "_model_name", "gemini-3.5-flash")
+        model_name = getattr(self.llm, "_model_name", "gemini-3.5-flash-lite")
         if client and hasattr(client, "aio"):
             try:
                 from google.genai import types

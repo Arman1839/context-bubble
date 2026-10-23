@@ -31,6 +31,7 @@ async def post_message(
         user_id=user.uid,
         user_name=participant.get("name", user.name),
         user_avatar=participant.get("avatar"),
+        user_animal=participant.get("avatar_animal"),
         req=req,
     )
     return msg
@@ -55,7 +56,13 @@ async def list_messages(
         .limit(limit)
         .get()
     )
-    return [Message(**m.to_dict()) for m in snap]
+    messages = []
+    for snapshot in snap:
+        data = snapshot.to_dict() or {}
+        if data.get("is_anonymous"):
+            data.update({"author_id": f"anonymous-{data.get('id', snapshot.id)}", "author_name": "Anonymous", "author_avatar": None, "author_animal": None})
+        messages.append(Message(**data))
+    return messages
 
 
 @router.post("/presence")

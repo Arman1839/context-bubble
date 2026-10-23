@@ -66,7 +66,10 @@ def get_async_firestore_client():
         cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         has_credentials = cred_path and os.path.exists(cred_path)
 
-        if not has_credentials and settings.ENVIRONMENT in ("development", "test") and not settings.FIRESTORE_EMULATOR_HOST:
+        if getattr(settings, "USE_IN_MEMORY_FIRESTORE", False):
+            logger.info("Using InMemoryFirestoreClient as configured by USE_IN_MEMORY_FIRESTORE.")
+            _async_firestore_client = InMemoryFirestoreClient()
+        elif not has_credentials and settings.ENVIRONMENT in ("development", "test") and not settings.FIRESTORE_EMULATOR_HOST:
             logger.info("Using InMemoryFirestoreClient for local development (no service account).")
             _async_firestore_client = InMemoryFirestoreClient()
         elif gcloud_firestore is not None:

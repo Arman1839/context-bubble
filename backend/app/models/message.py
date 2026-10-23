@@ -14,6 +14,7 @@ class Attachment(BaseModel):
     file_id: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
+    preview_text: Optional[str] = None
 
 
 class Message(BaseModel):
@@ -24,6 +25,7 @@ class Message(BaseModel):
     author_id: str
     author_name: str
     author_avatar: Optional[str] = None
+    author_animal: Optional[str] = None
     is_anonymous: bool = False
     text: str = Field(..., max_length=10000)
     attachments: Optional[List[Attachment]] = None
@@ -57,6 +59,7 @@ class Contribution(BaseModel):
     author_id: str
     author_name: str
     author_avatar: Optional[str] = None
+    author_animal: Optional[str] = None
     is_anonymous: bool = False
     text: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

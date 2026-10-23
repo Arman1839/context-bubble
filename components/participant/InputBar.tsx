@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import type { Attachment } from "@/types";
 import { uploadAndProcessFile, updatePresence } from "@/lib/api";
 import { LiveAudioSession } from "@/lib/audio";
+import { DocumentPreview } from "./DocumentPreview";
 
 interface Props {
   bubbleId: string;
@@ -54,6 +55,7 @@ export function InputBar({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -135,9 +137,11 @@ export function InputBar({
         url: res.secure_url || res.upload_url,
         mime_type: file.type,
         size_bytes: file.size,
+        preview_text: res.preview_text,
       };
 
       setAttachments((prev) => [...prev, newAttachment]);
+      setPreviewAttachment(newAttachment);
       setUploadProgress(null);
       setUploadStatus(
         isImage
@@ -204,30 +208,22 @@ export function InputBar({
         accept={ACCEPTED_TYPES}
       />
 
-      {/* Anonymous mode banner */}
-      <div
-        onClick={onToggleAnonymous}
-        className={`flex items-center justify-between px-4 py-2 border-b border-white/5 bg-[#1a2236] select-none ${
-          onToggleAnonymous ? "cursor-pointer hover:bg-[#202942] transition-colors" : ""
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM12 17c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z" />
-          </svg>
-          <p className="text-slate-400 text-xs">
-            Anonymous mode is{" "}
-            <span className={`font-bold ${isAnonymous ? "text-violet-400" : "text-white"}`}>
-              {isAnonymous ? "ON" : "OFF"}
-            </span>
-          </p>
-        </div>
-        {onToggleAnonymous && (
-          <span className="text-[10px] text-slate-400 font-medium px-1.5 py-0.5 rounded bg-slate-800/80 border border-white/5">
-            {isAnonymous ? "Turn OFF" : "Turn ON"}
+      {onToggleAnonymous && (
+        <button
+          type="button"
+          onClick={onToggleAnonymous}
+          aria-pressed={isAnonymous}
+          className="flex w-full items-center justify-between border-b border-white/5 bg-[#1a2236] px-4 py-2 text-left hover:bg-[#202942]"
+        >
+          <span className="flex items-center gap-2 text-xs text-slate-300">
+            <span aria-hidden="true">🔒</span>
+            Post anonymously
           </span>
-        )}
-      </div>
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isAnonymous ? "bg-violet-600/30 text-violet-200" : "bg-slate-800 text-slate-400"}`}>
+            {isAnonymous ? "ON" : "OFF"}
+          </span>
+        </button>
+      )}
 
       {/* Voice Recording Banner */}
       {isRecording && (
@@ -288,6 +284,7 @@ export function InputBar({
                 <span className="text-base shrink-0">{getFileIcon(att.type, att.mime_type)}</span>
               )}
               <span className="truncate">{att.label}</span>
+              <button type="button" onClick={() => setPreviewAttachment(att)} className="shrink-0 text-[10px] font-medium text-violet-300 hover:text-violet-200">Preview</button>
               {att.size_bytes && (
                 <span className="text-slate-500 text-[10px] shrink-0">{formatBytes(att.size_bytes)}</span>
               )}
@@ -302,6 +299,8 @@ export function InputBar({
           ))}
         </div>
       )}
+
+      {previewAttachment && <DocumentPreview attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />}
 
       {/* Textarea */}
       <textarea
