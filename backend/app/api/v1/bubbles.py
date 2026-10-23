@@ -212,6 +212,30 @@ async def get_bubble(
             snap = matches[0]
             bubble_id = snap.id
     if not snap.exists:
+        if bubble_id == "demo":
+            now = datetime.now(timezone.utc)
+            return BubbleResponse(
+                id="demo",
+                title="Pivot Decision – Oct 2026",
+                is_live=True,
+                expires_at=now + timedelta(hours=2, minutes=14),
+                member_count=6,
+                members=[
+                    BubbleMember(id="priya", name="Priya", avatar="https://api.dicebear.com/9.x/notionists/svg?seed=priya&backgroundColor=b6e3f4", role="host"),
+                    BubbleMember(id="arjun", name="Arjun", avatar="https://api.dicebear.com/9.x/notionists/svg?seed=arjun&backgroundColor=c0aede", role="participant"),
+                    BubbleMember(id="meera", name="Meera", avatar="https://api.dicebear.com/9.x/notionists/svg?seed=meera&backgroundColor=ffdfbf", role="participant"),
+                    BubbleMember(id="sara", name="Sara", avatar="https://api.dicebear.com/9.x/notionists/svg?seed=sara&backgroundColor=d1f4d9", role="participant"),
+                    BubbleMember(id="rahul", name="Rahul", avatar="https://api.dicebear.com/9.x/notionists/svg?seed=rahul&backgroundColor=ffd5dc", role="participant"),
+                    BubbleMember(id="ananya", name="Ananya", avatar="https://api.dicebear.com/9.x/notionists/svg?seed=ananya&backgroundColor=c9e9d2", role="participant"),
+                ],
+                retention_policy="temporary-plus-record",
+                anonymous_mode_enabled=False,
+                host_id="priya",
+                pop_state="ACTIVE",
+                trigger_mode="mention",
+                created_at=now,
+                join_code="demo",
+            )
         raise BubbleNotFoundException(bubble_id)
 
     data = snap.to_dict() or {}

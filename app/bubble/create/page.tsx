@@ -136,7 +136,12 @@ export default function CreateBubblePage() {
     });
     // Replace the creation screen so browser Back cannot restore its stale
     // "Bubble Created" state after this bubble has been ended.
-    router.replace(`/bubble/${createdBubble.id}?${searchParams.toString()}`);
+    const targetUrl = `/bubble/${createdBubble.id}?${searchParams.toString()}`;
+    if (typeof window !== "undefined") {
+      window.location.replace(targetUrl);
+    } else {
+      router.replace(targetUrl);
+    }
   }
 
   const isUserAuthenticated = Boolean(user && user.displayName);

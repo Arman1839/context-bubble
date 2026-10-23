@@ -85,7 +85,12 @@ function JoinBubbleForm() {
         ...(bubbleTitle ? { title: bubbleTitle } : {}),
       });
 
-      router.push(`/bubble/${actualBubbleId}?${sp.toString()}`);
+      const targetUrl = `/bubble/${actualBubbleId}?${sp.toString()}`;
+      if (typeof window !== "undefined") {
+        window.location.assign(targetUrl);
+      } else {
+        router.push(targetUrl);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to join bubble.");
     } finally {

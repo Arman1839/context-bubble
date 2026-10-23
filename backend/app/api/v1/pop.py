@@ -65,6 +65,14 @@ async def get_pop_status(
     db = get_async_firestore_client()
     snap = await db.collection("bubbles").document(bubble_id).get()
     if not snap.exists:
+        if bubble_id == "demo":
+            return {
+                "bubble_id": "demo",
+                "pop_state": "ACTIVE",
+                "is_live": True,
+                "retention_policy": "temporary-plus-record",
+                "exports": [],
+            }
         return {"pop_state": "POPPED"}
 
     bdata = snap.to_dict() or {}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { getBubble, popBubble, startBubblePop } from "@/lib/api";
 import { useFirebaseAuth } from "@/lib/auth";
 import { AmbientBubbles } from "@/components/layout/AmbientBubbles";
@@ -9,8 +9,26 @@ import type { RetentionPolicy } from "@/types";
 
 interface Props { bubbleId: string; }
 
+function extractBubbleIdFromUrl(pathname?: string | null, fallbackId?: string): string {
+  if (typeof window !== "undefined" && window.location.pathname) {
+    const match = window.location.pathname.match(/^\/bubble\/([^/?#]+)/);
+    if (match && match[1] && match[1] !== "create") {
+      return decodeURIComponent(match[1]);
+    }
+  }
+  if (pathname) {
+    const match = pathname.match(/^\/bubble\/([^/?#]+)/);
+    if (match && match[1] && match[1] !== "create") {
+      return decodeURIComponent(match[1]);
+    }
+  }
+  return fallbackId || "demo";
+}
+
 export function EndBubblePage({ bubbleId }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
+  const effectiveBubbleId = extractBubbleIdFromUrl(pathname, bubbleId);
   const { user, loading: authLoading } = useFirebaseAuth();
   const [title, setTitle] = useState("Context Bubble");
   const [loading, setLoading] = useState(true);
@@ -25,7 +43,7 @@ export function EndBubblePage({ bubbleId }: Props) {
 
   useEffect(() => {
     let active = true;
-    getBubble(bubbleId)
+    getBubble(effectiveBubbleId)
       .then((bubble) => {
         if (!active) return;
         setTitle(bubble.title);
@@ -36,7 +54,7 @@ export function EndBubblePage({ bubbleId }: Props) {
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : "Could not load this bubble."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [bubbleId]);
+  }, [effectiveBubbleId]);
 
   const finishBubble = async (forceShred = false, direct = false) => {
     setSubmitting(true);
@@ -46,7 +64,7 @@ export function EndBubblePage({ bubbleId }: Props) {
       : shareRecord ? "temporary-plus-record" : "temporary";
     try {
       if (direct) {
-        await startBubblePop(bubbleId, {
+        await startBubblePop(effectiveBubbleId, {
           retention_policy: retentionPolicy,
           share_decision_record: retentionPolicy !== "temporary",
           view_retention_days: 3,
@@ -54,7 +72,7 @@ export function EndBubblePage({ bubbleId }: Props) {
         router.replace("/");
         return;
       }
-      const result = await popBubble(bubbleId, {
+      const result = await popBubble(effectiveBubbleId, {
         force_shred_on_export_failure: forceShred,
         custom_briefing_prompt: focus.trim() || undefined,
         retention_policy: retentionPolicy,
@@ -92,7 +110,7 @@ export function EndBubblePage({ bubbleId }: Props) {
         {error && !showChanges && <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-950/30 p-3 text-sm text-amber-200">{error}</div>}
 
         {!showChanges && <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
-          <button type="button" onClick={() => router.replace(`/bubble/${bubbleId}`)} disabled={submitting} className="cursor-pointer rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 disabled:opacity-50">Back to bubble</button>
+          <button type="button" onClick={() => router.replace(`/bubble/${effectiveBubbleId}`)} disabled={submitting} className="cursor-pointer rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 disabled:opacity-50">Back to bubble</button>
           <button type="button" onClick={() => finishBubble(false, true)} disabled={submitting} className="cursor-pointer rounded-xl bg-rose-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-rose-950/30 disabled:opacity-50">{submitting ? "Ending…" : "End bubble"}</button>
           <button type="button" onClick={() => setShowChanges(true)} disabled={submitting} className="cursor-pointer rounded-xl border border-violet-400/30 bg-violet-500/10 px-5 py-3 text-sm font-semibold text-violet-200 disabled:opacity-50">End bubble with changes</button>
         </div>}
@@ -132,7 +150,7 @@ export function EndBubblePage({ bubbleId }: Props) {
         </div>}
 
         <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <button type="button" onClick={() => router.replace(`/bubble/${bubbleId}`)} disabled={submitting} className="cursor-pointer rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 disabled:opacity-50">Back to bubble</button>
+          <button type="button" onClick={() => router.replace(`/bubble/${effectiveBubbleId}`)} disabled={submitting} className="cursor-pointer rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 disabled:opacity-50">Back to bubble</button>
           <button type="button" onClick={() => finishBubble()} disabled={submitting} className="cursor-pointer rounded-xl bg-rose-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-rose-950/30 disabled:opacity-50">{submitting ? "Ending bubble…" : "Confirm and end bubble"}</button>
         </div>
         </>}

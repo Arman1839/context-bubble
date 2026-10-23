@@ -5,12 +5,17 @@
   },
   "hosting": {
     "public": "out",
+    "cleanUrls": true,
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
     ],
     "rewrites": [
+      {
+        "source": "/bubble/create",
+        "destination": "/bubble/create.html"
+      },
       {
         "source": "/bubble/:id/end",
         "destination": "/bubble/demo/end.html"

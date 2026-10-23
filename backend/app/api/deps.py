@@ -121,6 +121,8 @@ async def get_bubble_participant(
     db = get_async_firestore_client()
     bubble_snap = await db.collection("bubbles").document(bubble_id).get()
     if not bubble_snap.exists:
+        if bubble_id == "demo":
+            return {"id": user.uid, "name": user.name, "role": "participant"}
         raise BubbleNotFoundException(bubble_id)
     bubble_data = bubble_snap.to_dict() or {}
     removed_snap = await (
