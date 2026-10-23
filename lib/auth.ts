@@ -8,6 +8,8 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -101,16 +103,25 @@ export async function signInWithEmail(email: string, password: string): Promise<
 }
 
 export async function signInWithGoogle(): Promise<AppUser> {
+  const provider = new GoogleAuthProvider();
+  provider.addScope("profile");
+  provider.addScope("email");
+  provider.setCustomParameters({ prompt: "select_account" });
+
   try {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
     const result = await signInWithPopup(auth, provider);
-    return persistAuthenticatedUser(result.user);
+    return await persistAuthenticatedUser(result.user);
   } catch (err: any) {
-    if (err?.code === "auth/popup-blocked") {
-      throw new Error("The sign-in popup was blocked. Allow popups and try again.");
+    const code = (err?.code || "").toLowerCase();
+    if (code === "auth/popup-blocked" || code.includes("popup-blocked")) {
+      try {
+        await signInWithRedirect(auth, provider);
+        return new Promise(() => {});
+      } catch (redirectErr: any) {
+        throw new Error(formatAuthError(redirectErr));
+      }
     }
-    if (err?.code === "auth/operation-not-allowed") {
+    if (code === "auth/operation-not-allowed") {
       throw new Error("Google sign-in is not enabled for this Firebase project.");
     }
     throw new Error(formatAuthError(err));
@@ -215,6 +226,17 @@ export function useFirebaseAuth() {
     };
 
     syncUser();
+
+    // Catch redirect sign-in result if user returned from redirect flow
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result && result.user && !result.user.isAnonymous) {
+          persistAuthenticatedUser(result.user).then((u) => setUser(u));
+        }
+      })
+      .catch((err) => {
+        console.debug("Redirect auth check:", err);
+      });
 
     window.addEventListener("context_bubble_auth_change", syncUser);
 
